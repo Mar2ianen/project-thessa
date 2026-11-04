@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let field = source.with_frozen_erosion(&frozen)?;
     let mut rows = Vec::new();
     for (i, key) in keys.into_iter().enumerate() {
-        if key.face >= 6 || key.level > 24 || key.x >= 1 << key.level || key.y >= 1 << key.level {
+        if key.face >= 6 || key.level > 25 || key.x >= 1 << key.level || key.y >= 1 << key.level {
             return Err("invalid tile".into());
         }
         let start = Instant::now();

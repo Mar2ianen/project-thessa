@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Pack pinned CC0 OpenGL normals. Usage: SCRIPT SOURCE_DIRECTORY OUTPUT_DIRECTORY.
 
-The existing material swatches remain unchanged. Downsampling averages surface
+Matched material swatches own the source dimensions. Downsampling averages surface
 slopes, then re-encodes RGB8. Runtime removes the matched height-map gradient.
 Native RGB8 is preserved; RGB16 sources are converted to RGB8, as recorded.
 """
@@ -17,7 +17,7 @@ from PIL import Image
 
 ASSETS = [
     ("forest_ground_04", "forest-ground-04", 2048, "2k", "c7bf8a98de1dee39cb6028e06b8bdd37"),
-    ("brown_mud_leaves_01", "mud-litter-01", 512, "1k", "bfa4b76dc2218b8b953d3eb2055fafad"),
+    ("brown_mud_leaves_01", "mud-litter-01", 1024, "1k", "bfa4b76dc2218b8b953d3eb2055fafad"),
     ("forest_leaves_02", "forest-moss-litter-02", 2048, "2k", "cce2a8fd9454483a17f65b3cfc832725"),
 ]
 
@@ -53,7 +53,7 @@ def pack(source, destination):
             "path": str(target), "sha256": hashlib.sha256(packed).hexdigest(),
             "side": side, "bytes": len(packed), "format": "GN01 + u32 side + RGB8 OpenGL normal",
             "source_png_bit_depth": raw[24],
-            "processing": ("native RGB8" if raw[24] == 8 else "RGB16-to-RGB8 conversion") + "; slope-area downsample only for the existing 512-square litter swatch",
+            "processing": ("native RGB8" if raw[24] == 8 else "RGB16-to-RGB8 conversion") + ("; slope-area downsample" if side != source_side else "; native lattice"),
             "nonpositive_z_source_texels": folded,
             "fallback": "A folded normal cannot be represented by a single-valued height graph; runtime retains its height-derived slope, not an infinite tangent gradient.",
         }

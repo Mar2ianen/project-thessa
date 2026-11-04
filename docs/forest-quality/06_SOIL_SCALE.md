@@ -42,3 +42,9 @@ release timing, broader view residency and soil/reference acceptance remain open
 opaque-ground backside diffuse/GGX leak. Sky and water controls are preserved;
 complete native visual review found no obvious new regression. This is a light
 contract repair, not closure of item 6 soil blur or reference acceptance.
+
+[Doc 137](../137_GROUND_SOURCE_FIDELITY.md) retains the independent soil roughness source
+and restores the litter scan to native 1K across color, roughness, height and
+normal planes. Soil/moss stay 2K; GPU page/cache budgets are unchanged. The
+extra CPU source pyramids cost 28 MiB. Matched L25 pages show finer source
+features, while broad foreground smear and reference acceptance remain open.

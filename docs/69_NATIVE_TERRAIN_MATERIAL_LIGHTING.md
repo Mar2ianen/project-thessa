@@ -897,3 +897,9 @@ receive direct land diffuse or GGX sunlight through an opaque triangle. The
 existing derivative receiver normal owns that test; sky and liquid endpoints
 retain their prior response. No new pass, ray query, quality setting or topology
 is introduced. Coarse faceted terminators and soil appearance remain open.
+
+[Doc 137](137_GROUND_SOURCE_FIDELITY.md) retains the independent soil roughness source
+and restores the litter scan to native 1K across color, roughness, height and
+normal planes. Soil/moss stay 2K; GPU page/cache budgets are unchanged. The
+extra CPU source pyramids cost 28 MiB. Matched L25 pages show finer source
+features, while broad foreground smear and reference acceptance remain open.

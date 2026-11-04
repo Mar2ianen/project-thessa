@@ -8,7 +8,7 @@ pub(crate) use normal::sample_residual;
 pub const SWATCH_WIDTH_M: f64 = 3.15;
 pub const HEIGHT_RANGE_M: f32 = 0.060;
 const SOIL_SIDE: usize = 2048;
-const LITTER_SIDE: usize = 512;
+const LITTER_SIDE: usize = 1024;
 const MOSS_SIDE: usize = 2048;
 
 #[derive(Clone, Copy, Debug)]
@@ -40,9 +40,9 @@ const MOSS_MEAN: GroundSample = GroundSample {
     height_m: -0.0015365105,
 };
 const LITTER_MEAN: GroundSample = GroundSample {
-    albedo_linear: [0.13887769, 0.10027028, 0.03611909],
-    roughness: 0.9196433,
-    height_m: -0.0054620567,
+    albedo_linear: [0.138_845_5, 0.100247348, 0.036_103_465],
+    roughness: 0.919_649_54,
+    height_m: -0.005_462_056_5,
 };
 
 pub(crate) fn decode_srgb(v: f64) -> f64 {
@@ -66,7 +66,7 @@ pub(crate) fn encode_srgb(v: f64) -> f64 {
 fn swatch_mean() -> GroundSample {
     GroundSample {
         albedo_linear: [0.106332146, 0.075658605, 0.04803002],
-        roughness: 0.7873502,
+        roughness: 0.90076196,
         height_m: -0.00685546,
     }
 }
@@ -400,10 +400,8 @@ fn forest_substrate(rgb: [f32; 3], roughness: f32) -> ([f32; 3], f32) {
         let absorption = [0.28, 0.24, 0.25][i];
         (f64::from(rgb[i]) * (absorption + (1.0 - absorption) * mineral)) as f32
     });
-    (
-        color,
-        (f64::from(roughness) * (1.0 - mineral * 0.35)) as f32,
-    )
+    // Pigment grading does not replace the independent roughness scan.
+    (color, roughness)
 }
 
 /// Body-fixed optical cover, not authoritative water storage or moss biology.
@@ -688,6 +686,27 @@ mod tests {
             difference > 0.1,
             "one-swatch translation must not reproduce the same stones"
         );
+    }
+
+    #[test]
+    fn pigment_transfer_preserves_the_independent_scan_roughness_plane() {
+        // The FG01 roughness plane, not the diffuse photograph's brightness,
+        // is the source of dry substrate microfacet roughness.
+        let texture = Texture::decode();
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(
+            &include_bytes!("../../../assets/textures/forest-ground-04.bin.gz")[..],
+        )
+        .read_to_end(&mut raw)
+        .unwrap();
+        for (pixel, source) in texture.0[0].pixels.iter().zip(raw[8..].as_chunks::<6>().0) {
+            assert_eq!(pixel[3], f32::from(source[3]) / 255.0);
+        }
+        for roughness in [0.0, 0.1, 0.5, 0.9, 1.0] {
+            for brightness in [0.0, 0.01, 0.1, 0.5, 1.0] {
+                assert_eq!(forest_substrate([brightness; 3], roughness).1, roughness);
+            }
+        }
     }
 
     #[test]

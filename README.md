@@ -1063,3 +1063,8 @@ reference acceptance remain open.
 closes direct diffuse/GGX leakage through the back side of mapped terrain
 triangles, preserving sky and liquid response. Physical-GPU controls and native
 visual review pass; broad soil blur and full-scene parity remain open.
+
+[Ground source fidelity](docs/137_GROUND_SOURCE_FIDELITY.md) preserves independent
+scan roughness and restores native 1K litter color/roughness/height/normals.
+The matched L25 pages retain finer detail; full-scene soil smear remains open.
+CPU source data grows 28 MiB, with unchanged GPU page budgets and no speedup claim.

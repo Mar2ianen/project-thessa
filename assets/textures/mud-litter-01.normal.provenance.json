@@ -5,12 +5,12 @@
   "source_png_md5": "bfa4b76dc2218b8b953d3eb2055fafad",
   "source_png_sha256": "0c5c37348830b6a36024a114359e26aaf2f48bf2b435a5ef2d6999bcd4b530b7",
   "path": "assets/textures/mud-litter-01.normal.bin.gz",
-  "sha256": "170940894fb7dd18a83da65098b0ee8671e34f447d7d3802cedcf2736deb2b4f",
-  "side": 512,
-  "bytes": 735704,
+  "sha256": "aeaefa0c15af6031191fcbe2a3f1eefec40eb12a343eb521fe649135d34b559a",
+  "side": 1024,
+  "bytes": 3055526,
   "format": "GN01 + u32 side + RGB8 OpenGL normal",
   "source_png_bit_depth": 16,
-  "processing": "RGB16-to-RGB8 conversion; slope-area downsample only for the existing 512-square litter swatch",
+  "processing": "RGB16-to-RGB8 conversion; native lattice",
   "nonpositive_z_source_texels": 0,
   "fallback": "A folded normal cannot be represented by a single-valued height graph; runtime retains its height-derived slope, not an infinite tangent gradient."
 }

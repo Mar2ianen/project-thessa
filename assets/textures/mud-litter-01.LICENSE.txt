@@ -4,11 +4,13 @@ Brown Mud Leaves 01 — Rob Tuytel / Poly Haven.
 Source: https://polyhaven.com/a/brown_mud_leaves_01
 License: https://polyhaven.com/license
 CC0 legal text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
-Retrieved: 2026-10-25 through the public direct asset download links.
+Originally retrieved: 2026-10-25 through public direct asset links.
+Native 1K inputs revalidated and repacked: 2026-11-04.
 
-The derived mud-litter-01.bin.gz contains a 512-square RGB8 sRGB reflectance,
-R8 linear roughness and R16 relative-height swatch. The source is downsampled
-in linear RGB; the source 16-bit roughness is normalized before conversion to
+The derived mud-litter-01.bin.gz contains a native 1024-square RGB8 sRGB reflectance,
+R8 linear roughness and R16 relative-height swatch. There is no spatial
+downsample; runtime mips filter linear RGB. The source 16-bit roughness is
+normalized before conversion to
 8-bit (never truncated/modulo-wrapped). The source displacement remains 16-bit.
 All three maps share the same coordinates. No baked AO or lighting is imported.
 
@@ -25,6 +27,6 @@ adjacent mud-litter-01.provenance.json. Pillow/NumPy are offline tooling only.
 The companion mud-litter-01.normal.bin.gz contains CC0 OpenGL normals from the
 same Poly Haven scan. Exact URLs, checksums and processing are in
 mud-litter-01.normal.provenance.json. Reproduce with
-tools/worldgen-rocky/import_ground_normals.py. The old color/roughness/height
-swatch is unchanged. Runtime gradients are optical shading detail; they do not
+tools/worldgen-rocky/import_ground_normals.py. The color/roughness/height and normal swatches retain the same native 1K
+lattice. Runtime gradients are optical shading detail; they do not
 add collision geometry or a measured physical displacement calibration.

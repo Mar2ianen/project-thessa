@@ -1212,6 +1212,16 @@ fn resolved_material_lod_reports_parent_fallback_and_missing_pages() {
 #[ignore = "requires a wgpu adapter; controlled L24 texture-filter oracle"]
 fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
     let backend = Backend::bring_up().expect("requires the local hardware adapter");
+    for anisotropy in [1, 16] {
+        if anisotropy > 1 && backend.caps.terrain_anisotropy_supported != Some(true) {
+            eprintln!("SKIP anisotropic magnification control: adapter lacks filtering support");
+            continue;
+        }
+        verify_l24_magnification(&backend, anisotropy);
+    }
+}
+
+fn verify_l24_magnification(backend: &Backend, anisotropy: u16) {
     const SIZE: u32 = 65;
     const PAGE_SIDE: usize = 128;
     const PAGE_CELLS: f64 = 125.0;
@@ -1275,14 +1285,14 @@ fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
     let settings = thessa_graphics::ResolvedGraphicsSettings {
         surface_quality: thessa_graphics::Quality::High,
         terrain_debug_view: thessa_graphics::TerrainDebugView::Albedo,
-        terrain_material_anisotropy: 1,
+        terrain_material_anisotropy: anisotropy,
         terrain_normal_maps: false,
         terrain_ground_detail: true,
         specular_reflections: false,
         shadow_enabled: false,
         ..Default::default()
     };
-    let target = OffscreenTarget::new(&backend, SIZE, SIZE).unwrap();
+    let target = OffscreenTarget::new(backend, SIZE, SIZE).unwrap();
     for face in [1, 4] {
         // Child path 3/3 places the L24 sample within half a tile of the face
         // centre, where the chart's physical texel pitch matches the oracle.
@@ -1291,7 +1301,7 @@ fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
         let geometry_anchor = TileAnchor::new(geometry, RADIUS_M).unwrap();
         let fine_anchor = TileAnchor::new(fine, RADIUS_M).unwrap();
         let mut renderer = TerrainRenderer::with_capacity_and_lighting(
-            &backend,
+            backend,
             &[TerrainPatch {
                 anchor: geometry_anchor,
                 page: &height,
@@ -1307,7 +1317,7 @@ fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
         .unwrap();
         renderer
             .update_lighting(
-                &backend,
+                backend,
                 &SurfaceLighting {
                     ambient_lux: [std::f32::consts::PI; 4],
                     directions: [[0.0; 4]; 3],
@@ -1319,7 +1329,7 @@ fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
         let fine_id = (geometry_id << 4) | 0x0f;
         let pages = [(fine_id, (1, material.clone()))].into_iter().collect();
         renderer
-            .update_materials(&backend, &[fine_id], &pages)
+            .update_materials(backend, &[fine_id], &pages)
             .unwrap();
 
         for footprint_m in footprints_m {
@@ -1348,11 +1358,11 @@ fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
                     world_position_m: eye,
                     exposure: 1.0,
                 };
-                renderer.update_view(&backend, &view).unwrap();
+                renderer.update_view(backend, &view).unwrap();
                 let mut encoder = backend.device.create_command_encoder(&Default::default());
                 renderer.encode(&mut encoder, &target.color, &target.depth);
                 backend.queue.submit([encoder.finish()]);
-                let frame = target.read_rgba8(&backend).unwrap();
+                let frame = target.read_rgba8(backend).unwrap();
                 let pixel = &frame[(32 * SIZE as usize + 32) * 4..][..4];
                 actual.push(std::array::from_fn(|channel| {
                     srgb_to_linear(pixel[channel])
@@ -1387,7 +1397,7 @@ fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
                 }
             }
             eprintln!(
-                "L24 magnification face={face} nominal_footprint_m={footprint_m} phases={} periods={periods:?} max_srgb_code_error={max_code_error}",
+                "L24 magnification anisotropy={anisotropy} face={face} nominal_footprint_m={footprint_m} phases={} periods={periods:?} max_srgb_code_error={max_code_error}",
                 actual.len()
             );
         }

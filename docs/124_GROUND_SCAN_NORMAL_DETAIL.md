@@ -97,3 +97,9 @@ fixes duplicate optical slope during partial canonical-height residency. An
 independent actual-raster test fails on the old shader and passes after the
 correction; full-height and no-base fallback checks also pass. This does not
 close the near-soil visual or moving-camera acceptance gap.
+
+[Doc 137](137_GROUND_SOURCE_FIDELITY.md) retains the independent soil roughness source
+and restores the litter scan to native 1K across color, roughness, height and
+normal planes. Soil/moss stay 2K; GPU page/cache budgets are unchanged. The
+extra CPU source pyramids cost 28 MiB. Matched L25 pages show finer source
+features, while broad foreground smear and reference acceptance remain open.

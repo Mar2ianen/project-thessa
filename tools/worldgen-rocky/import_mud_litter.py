@@ -20,20 +20,18 @@ for role, expected in checks.items():
     maps[role] = np.asarray(Image.open(path))
 assert maps['diff'].dtype == np.uint8 and maps['diff'].shape == (1024, 1024, 3)
 assert all(maps[r].dtype == np.uint16 and maps[r].shape == (1024, 1024) for r in ['rough','disp'])
-def average(a):
-    return (a[0::2,0::2] + a[1::2,0::2] + a[0::2,1::2] + a[1::2,1::2]) * .25
-rgb = maps['diff'].astype(float) / 255
-linear = average(np.where(rgb <= .04045, rgb / 12.92, ((rgb+.055)/1.055)**2.4))
-rgb = np.where(linear <= .0031308, linear*12.92, 1.055*linear**(1/2.4)-.055)
-rough = average(maps['rough'].astype(float)) / 65535
-height = average(maps['disp'].astype(float))
-p = np.empty((512,512,6),np.uint8)
-p[:,:,:3] = np.rint(rgb*255).astype(np.uint8)
+# Preserve the native scan lattice; runtime owns the linear-light mip pyramid.
+side = 1024
+rgb = maps['diff']
+rough = maps['rough'].astype(float) / 65535
+height = maps['disp'].astype('<u2')
+p = np.empty((side,side,6),np.uint8)
+p[:,:,:3] = rgb
 p[:,:,3] = np.rint(rough*255).astype(np.uint8)
-p[:,:,4:] = np.rint(height).astype('<u2').view(np.uint8).reshape(512,512,2)
-raw = b'FG01' + (512).to_bytes(4,'little') + p.tobytes()
+p[:,:,4:] = height.view(np.uint8).reshape(side,side,2)
+raw = b'FG01' + side.to_bytes(4,'little') + p.tobytes()
 destination.write_bytes(gzip.compress(raw,compresslevel=9,mtime=0))
 # Report the exact quantized payload mean, matching runtime RGB decoding.
 v = p[:,:,:3].astype(float)/255
 v = np.where(v<=.04045,v/12.92,((v+.055)/1.055)**2.4)
-print(json.dumps(dict(path=str(destination),sha256=hashlib.sha256(destination.read_bytes()).hexdigest(),bytes=destination.stat().st_size,mean_rgb=v.mean(axis=(0,1)).tolist(),mean_roughness=(p[:,:,3]/255).mean(),mean_height_m=((p[:,:,4:].copy().view('<u2').reshape(512,512)/65535-.5)*.025).mean(),sources=checks),indent=2))
+print(json.dumps(dict(path=str(destination),sha256=hashlib.sha256(destination.read_bytes()).hexdigest(),bytes=destination.stat().st_size,side=side,decoded_bytes=len(raw),mean_rgb=v.mean(axis=(0,1)).tolist(),mean_roughness=(p[:,:,3]/255).mean(),mean_height_m=((p[:,:,4:].copy().view('<u2').reshape(side,side)/65535-.5)*.025).mean(),sources=checks),indent=2))

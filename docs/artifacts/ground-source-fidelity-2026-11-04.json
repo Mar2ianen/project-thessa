@@ -1,0 +1,794 @@
+{
+  "date": "2026-11-04",
+  "baseline": "d26efd596e62d6125151863396a296444174e472",
+  "status": "retain source-channel fidelity and native litter bandwidth; broad soil blur and scene/reference acceptance remain open",
+  "references": [
+    {
+      "project": "Filament",
+      "revision": "e079be78521a8da7542ebedfb86d279deaa98132",
+      "url": "https://github.com/google/filament/blob/e079be78521a8da7542ebedfb86d279deaa98132/samples/sample_full_pbr.cpp#L260",
+      "lines": [
+        260,
+        278
+      ],
+      "application": "independent supplied baseColorMap and roughnessMap; no copied implementation"
+    },
+    {
+      "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/physically-based-materials-in-unreal-engine",
+      "application": "separate PBR material inputs"
+    },
+    {
+      "url": "https://polyhaven.com/a/brown_mud_leaves_01",
+      "application": "preserve pinned native 1K CC0 source instead of offline512 reduction"
+    },
+    {
+      "url": "https://vulkan.lunarg.com/doc/view/1.4.350.0/linux/antora/spec/latest/chapters/textures.html",
+      "application": "anisotropic sampling implementation dependence; direct physical-GPU oracle required"
+    }
+  ],
+  "reference_source": {
+    "path": "/tmp/thessa-filament-full-pbr.cpp",
+    "sha256": "422c3a3758691980589c9c5c3b2cd9c13085c7423f94ebb0f25d085d32575e0d"
+  },
+  "source_pins": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/tools/worldgen-rocky/src/ground_detail.rs",
+      "sha256": "661471e1bbc899de42b41c97c9f5cb8acf2807e49166740d55a4ccf4c1f9e31e"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/tools/worldgen-rocky/import_mud_litter.py",
+      "sha256": "482052910848bdf88365a00570db1e2301dcc774ffc5af773a2a3a9398adca97"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/tools/worldgen-rocky/import_ground_normals.py",
+      "sha256": "ad3f7de5526a499491c0cb97eeeb4ddb5c3cd372d86e77825c520fea3ef12382"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/tools/worldgen-rocky/examples/ground_page_probe.rs",
+      "sha256": "9f01727745c1d983a9485dcd3406a60942c636d8beeb2f1f580b6f1ef976cff7"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/crates/render-wgpu/tests/material.rs",
+      "sha256": "156a064161f74ab22c78a862f922525fe76bd854a2ec73c5125f92774fd8129c"
+    }
+  ],
+  "asset_pins": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/assets/textures/mud-litter-01.bin.gz",
+      "sha256": "872c02b2081ac92301ba5a70ff472bd9a9d473025a672aafd0a5c2c4f7262093"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/assets/textures/mud-litter-01.normal.bin.gz",
+      "sha256": "aeaefa0c15af6031191fcbe2a3f1eefec40eb12a343eb521fe649135d34b559a"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/assets/textures/mud-litter-01.provenance.json",
+      "sha256": "64af22adc7aff5b4bb82a6d78e8b14f0c72c6c88f8ed2aaf0e6c415068012728"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/assets/textures/mud-litter-01.normal.provenance.json",
+      "sha256": "75bbdc485caf96be7db2154de9f5cb4d0b3f6fa43eea65f58b5d08b02e962d92"
+    }
+  ],
+  "controls": {
+    "roughness_old_first_sample": 0.7229264,
+    "roughness_source_sample": 0.88235295,
+    "roughness_soil_mean_old": 0.7873502,
+    "roughness_soil_mean_new": 0.90076196,
+    "roughness_composed_page": {
+      "fixture": {
+        "face": 1,
+        "level": 24,
+        "x": 6162656,
+        "y": 12173886
+      },
+      "rgb_byte_identical": true,
+      "normal_byte_identical": true,
+      "base_normal_byte_identical": true,
+      "water_byte_identical": true,
+      "roughness_changed_texels": 4421,
+      "roughness_decreased_texels": 0,
+      "roughness_before_mean": 0.8023284313725491,
+      "roughness_after_mean": 0.803387331495098,
+      "roughness_before_minmax": [
+        0.7764705882352941,
+        0.8352941176470589
+      ],
+      "roughness_after_minmax": [
+        0.7803921568627451,
+        0.8352941176470589
+      ]
+    },
+    "litter_l24_minification": {
+      "same_fixed_key": true,
+      "page_pitch_m": 0.0030517578125,
+      "litter_source_pitch_before_m": 0.0025390625,
+      "litter_source_pitch_after_m": 0.00126953125,
+      "changed_rgb_samples": 3103,
+      "water_identical": true,
+      "base_normal_identical": true,
+      "normal_changed": true,
+      "mean_srgb_before": [
+        61.46063232421875,
+        55.18719482421875,
+        36.72723388671875
+      ],
+      "mean_srgb_after": [
+        61.45953369140625,
+        55.18731689453125,
+        36.7259521484375
+      ]
+    },
+    "litter_l25": {
+      "key": {
+        "face": 1,
+        "level": 25,
+        "x": 12325312,
+        "y": 24347772
+      },
+      "page_pitch_m": 0.00152587890625,
+      "litter_source_pitch_before_m": 0.0025390625,
+      "litter_source_pitch_after_m": 0.00126953125,
+      "changed_rgb_samples": 40839,
+      "water_identical": true,
+      "base_normal_identical": true,
+      "normal_changed": true,
+      "mean_srgb_before": [
+        58.2763671875,
+        52.0255126953125,
+        34.349365234375
+      ],
+      "mean_srgb_after": [
+        57.98089599609375,
+        51.41217041015625,
+        34.25555419921875
+      ]
+    },
+    "source_validation": {
+      "side": 1024,
+      "all_four_planes_exact": true,
+      "color_source": "native RGB8",
+      "roughness": "normalized R16 to R8 round-to-nearest",
+      "height_source": "native R16",
+      "normal_source": "native lattice; source RGB16 converted to RGB8",
+      "cpu_mip_extra_bytes": 29360128,
+      "packed_bytes_before": 2151183,
+      "packed_bytes_after": 8771365
+    },
+    "anisotropic_magnification": {
+      "ratios": [
+        1,
+        16
+      ],
+      "faces": [
+        1,
+        4
+      ],
+      "footprints_m": [
+        0.000734,
+        0.0016
+      ],
+      "phase_count": 9,
+      "linear_cosine_periods_texels": [
+        2,
+        4,
+        8
+      ],
+      "channel_comparisons": 216,
+      "max_rgb8_code_error": 1,
+      "unchanged_tolerance": 2,
+      "decision": "no production filtering bypass justified"
+    }
+  },
+  "checks": {
+    "worldgen": {
+      "passed": 306,
+      "ignored": 1
+    },
+    "strict_mean_final": {
+      "passed": 1,
+      "note": "rerun after identical-f32 literal normalization"
+    },
+    "gpu_periodic_magnification": {
+      "passed": 1,
+      "channel_comparisons": 216
+    },
+    "worldgen_all_target_all_feature_clippy": "pass",
+    "render_material_clippy": "pass",
+    "native_build": "pass",
+    "architecture_gate": "pass",
+    "formatting": "pass"
+  },
+  "logs": [
+    {
+      "path": "/tmp/thessa-soil-roughness-red.log",
+      "sha256": "48b28504f80ece1a3c5ea3640ec04d8833c66d1a2b6f15c5a8ed88f361ab59ca"
+    },
+    {
+      "path": "/tmp/thessa-soil-roughness-worldgen.log",
+      "sha256": "54332786e130e64c480ef5586f0063e8c383b8ee6be85a8fbc9ddffec73905e9"
+    },
+    {
+      "path": "/tmp/thessa-litter-native-worldgen.log",
+      "sha256": "5fa6c54384d3def267a462e5bd364ea89b31c30cc69db4ed806a419a7a32d518"
+    },
+    {
+      "path": "/tmp/thessa-litter-native-means-final.log",
+      "sha256": "1f7299c7a32cbc1ad10e7a152f0feb208ffd4ded5006014b63eb20be39753bd2"
+    },
+    {
+      "path": "/tmp/thessa-litter-native-clippy-final.log",
+      "sha256": "fce70d4c2a439360d6a22f822e57714f9c17a5d4f4a7d0a05e7bb74f4a268df6"
+    },
+    {
+      "path": "/tmp/thessa-ground-filter-clippy-final.log",
+      "sha256": "2e57b608e14b66d1cb6c7f1da0a215a50b46a76f936cffd7261678d26eb23479"
+    },
+    {
+      "path": "/tmp/thessa-litter-native-build.log",
+      "sha256": "cf8af0503b3ac89284af6b2afe56e550caf1e652d7452ecc9b9c1ecbdcf3d746"
+    },
+    {
+      "path": "/tmp/thessa-litter-native-architecture-final.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    {
+      "path": "/tmp/thessa-ground-filter-final-build.log",
+      "sha256": "fda9506d986b74a116c018068cadc89b14a188ae681c15770a2054fe7124c3f2"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-filter-anisotropic-magnification.log",
+      "sha256": "b07982d00ab6e1e6bb4dc77f69d799393e1ff49a2b7d4dd49b059294006ea563"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-filter-final.log",
+      "sha256": "b7d7d4149d4a46aad29a23b7633d28932597878644c281e7a7ad843427910ee3"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-before.log",
+      "sha256": "7e87eb39da086f796a4615809f1f7f88112417b6a430a2656b67444c96ded353"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-after.log",
+      "sha256": "741c3c52fa144cf7b93e3ff03ca08ab9a225c8a6d54fd1b951de073db296adb1"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-before.log",
+      "sha256": "65b6128312ef04413d54c9401ada7ae8d0a3cced4a5e5a39649adf1f4dc18dd7"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-after.log",
+      "sha256": "a2df0b0150e42441de01537ae5fbe1aac0d4965e21019e13a29afd3728373c0d"
+    }
+  ],
+  "pair_provenance": {
+    "roughness_only": [
+      {
+        "label": "before",
+        "source_sha256": "8636647862a666651e35080785a63bf3a23fe88ddd5d56001cfa751cc65f5493",
+        "command": [
+          "cargo",
+          "run",
+          "-p",
+          "thessa-worldgen-rocky",
+          "--example",
+          "ground_page_probe",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-before",
+          "1",
+          "24",
+          "6162656",
+          "12173886"
+        ],
+        "exit_code": 0,
+        "log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-before.log"
+      },
+      {
+        "label": "after",
+        "source_sha256": "fd5d7a5ba5396ab4d5b7cb01f8008dd9278c9576adda0f5cd6ffa2f878bfba50",
+        "command": [
+          "cargo",
+          "run",
+          "-p",
+          "thessa-worldgen-rocky",
+          "--example",
+          "ground_page_probe",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-after",
+          "1",
+          "24",
+          "6162656",
+          "12173886"
+        ],
+        "exit_code": 0,
+        "log": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-after.log"
+      }
+    ],
+    "native_litter_l25": [
+      {
+        "label": "before",
+        "input_sha256": {
+          "tools/worldgen-rocky/src/ground_detail.rs": "f60119eb6bee4878b5ee022b7bbd3363a5553f3baf24805f5201501a5b2b12e1",
+          "assets/textures/mud-litter-01.bin.gz": "72f0c0ca42f318655a45c5ede706793fcf19c9754aaa7867ae0300c5eda99447",
+          "assets/textures/mud-litter-01.normal.bin.gz": "170940894fb7dd18a83da65098b0ee8671e34f447d7d3802cedcf2736deb2b4f"
+        },
+        "command": [
+          "cargo",
+          "run",
+          "-p",
+          "thessa-worldgen-rocky",
+          "--example",
+          "ground_page_probe",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-before",
+          "1",
+          "25",
+          "12325312",
+          "24347772"
+        ],
+        "exit_code": 0
+      },
+      {
+        "label": "after",
+        "input_sha256": {
+          "tools/worldgen-rocky/src/ground_detail.rs": "040b78f0abb2cd04d4616478a1c3db8f2f686ef9b3a7ae49b3f1b2aa8e401a46",
+          "assets/textures/mud-litter-01.bin.gz": "872c02b2081ac92301ba5a70ff472bd9a9d473025a672aafd0a5c2c4f7262093",
+          "assets/textures/mud-litter-01.normal.bin.gz": "aeaefa0c15af6031191fcbe2a3f1eefec40eb12a343eb521fe649135d34b559a"
+        },
+        "command": [
+          "cargo",
+          "run",
+          "-p",
+          "thessa-worldgen-rocky",
+          "--example",
+          "ground_page_probe",
+          "--",
+          "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-after",
+          "1",
+          "25",
+          "12325312",
+          "24347772"
+        ],
+        "exit_code": 0
+      }
+    ],
+    "restoration": "Original files temporarily installed in Python try/finally for fixed-page controls, then final files restored; no git reset or history rewrite"
+  },
+  "captures": [
+    {
+      "name": "source-roughness-fhd-030m",
+      "provenance": {
+        "source": {
+          "commit": "d26efd596e62d6125151863396a296444174e472",
+          "dirty": true,
+          "tracked_diff_sha256": "f731d78249f243726747e0103450eec9bb59dd8d5839864cb78cb91f44e890f1",
+          "untracked_sha256": {}
+        },
+        "binary_sha256": "e0f5c46f35ff1fce141be51d64a39a09445194ac4c5d5bf71307948b5d838abd",
+        "worker": "root; Luna independently reviewed asset basis",
+        "build_profile": "debug; not timing evidence",
+        "review": "pending scene integration inspection; macro appearance not accepted",
+        "performance_equivalent": false,
+        "exit_code": 0,
+        "artifacts_sha256": {
+          "full-fhd.toml": "88e247c857589795fe7081b5ed67cd5b5508ab2d5004e9fc827d0e79b913c78e",
+          "command.json": "c0a6f7f4ca260941cab9ec95b71d53dac28688020a189f56acecc9f2e3a2a1e6",
+          "native.log": "c1449cf1fa9a3be2aefc6a39b007b8e1fd4b0b0041730cf726d7ba2371dfa54c",
+          "full-fhd-trace.toml": "5679a182ecbbcdf78ff8c725e980e60ea9646dd38478bd5c06cc39e06df39752",
+          "full-fhd.png": "a9f966c5e0d349f66dddb5471421dd3520d8a29870249c70eab2c5c4e7575502",
+          "full-fhd.rgba16f": "9cf69f7caac0ec72a1e5040467262fc806d9744d48c4d9c99034719791fd0fe6"
+        }
+      },
+      "manifest": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/manifest.json",
+        "sha256": "76cd39fc9a15e9dd6d81dd74275646771081efde0f52fac9593d99460bac8ccf"
+      }
+    },
+    {
+      "name": "litter-native-fhd-030m",
+      "provenance": {
+        "source": {
+          "commit": "d26efd596e62d6125151863396a296444174e472",
+          "dirty": true,
+          "tracked_diff_sha256": "a8c7aa4f4c69b91931c3782618ce08eda6e1792de0be1836505b918e69f36246",
+          "untracked_sha256": {}
+        },
+        "binary_sha256": "240b94ac64cc3de0dccb3ba2571193bc3564c324451f67420b7ffb9f833e3922",
+        "worker": "root; Luna independently reviewed asset basis",
+        "build_profile": "debug; not timing evidence",
+        "review": "pending scene integration inspection; macro appearance not accepted",
+        "performance_equivalent": false,
+        "exit_code": 0,
+        "artifacts_sha256": {
+          "full-fhd.toml": "88e247c857589795fe7081b5ed67cd5b5508ab2d5004e9fc827d0e79b913c78e",
+          "command.json": "4f540921529305be7e186776643ceb0b7e76574146ad980fcca6dfdb134c4647",
+          "native.log": "9c388d5f17f55e2915b9a38406746d976b8a6feb6e790b4c8b726e7ebedd7ff2",
+          "full-fhd-trace.toml": "9b8fa9ac0bbdfe0ed859efcfbfea50b575e711e36e9ad2d083176b07447de8e8",
+          "full-fhd.png": "8afafd00d21524849d2b0dac12f1c1dd43b0fe117a35829a88fbef513636b7a7",
+          "full-fhd.rgba16f": "90d39dd09fae272af3ccac6b6a19380e78cd2f518f8d5d214ad431db11193713"
+        }
+      },
+      "manifest": {
+        "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/manifest.json",
+        "sha256": "04ef19a9bea3116f4c6e93dd5a2b4b0d529e3e6f72c4de088ce412c87ad37732"
+      }
+    }
+  ],
+  "visual_review": {
+    "inventory": [
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-before",
+        "image_count": 2,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-before/0-albedo.png",
+            "sha256": "e2171583737ab031fdbe5e3fa8b6733fcd4254c94a20273a562114cc73d83a48"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-before/0-normal.png",
+            "sha256": "eb111f77d20ac468ca740fc05e069bdcd9c3edf35463587d50d04510daa1ef64"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-after",
+        "image_count": 2,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-after/0-albedo.png",
+            "sha256": "2a56b3c6a731001f2fcc6f22ec6533f86162271e538dbaec265bf2c6884f0d50"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-after/0-normal.png",
+            "sha256": "eb111f77d20ac468ca740fc05e069bdcd9c3edf35463587d50d04510daa1ef64"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-review",
+        "image_count": 5,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-review/after-rgb.png",
+            "sha256": "4116b90394d572ad8e3638d96f4f1b0b0d06379e87b61721922e21f0f9717e7e"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-review/after-roughness.png",
+            "sha256": "3569e13d9164b1c4f4f209dc95e27ddf30f9741ed6ccfa99913dbacb66f9b39a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-review/before-rgb.png",
+            "sha256": "4116b90394d572ad8e3638d96f4f1b0b0d06379e87b61721922e21f0f9717e7e"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-review/before-roughness.png",
+            "sha256": "afdda45a7c72ff221f16eb247eb826423d0135d2cb64862fb5a3bbece7d98d0c"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-page-review/review-all.png",
+            "sha256": "bf812f6a4f5fd3624e4bbe0e321f125a93c21dbb79565beb0a0b1f741ba003e2"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m",
+        "image_count": 23,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/full-fhd.png",
+            "sha256": "a9f966c5e0d349f66dddb5471421dd3520d8a29870249c70eab2c5c4e7575502"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/review-all.jpg",
+            "sha256": "160bf8069942f1da5a769fa6a3603f43e1d2a9283826b0982d3b00c728ae9f8b"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/00-none.png",
+            "sha256": "88683c7ea36e4a01764c6986a98e167ec139af6fbcea6a32f603107948016e0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/01-none.png",
+            "sha256": "a9f966c5e0d349f66dddb5471421dd3520d8a29870249c70eab2c5c4e7575502"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/02-none.png",
+            "sha256": "88683c7ea36e4a01764c6986a98e167ec139af6fbcea6a32f603107948016e0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/03-none.png",
+            "sha256": "a9f966c5e0d349f66dddb5471421dd3520d8a29870249c70eab2c5c4e7575502"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/04-water_weight.png",
+            "sha256": "3b2201203feebea52d7c45fe95c60d23b197e80211b0909fc31ea8c2fc620840"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/05-height.png",
+            "sha256": "85ea9a9a8d66228322eded67d4d883550f9a657132abbb6fbc792e9f43b15b28"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/06-distance.png",
+            "sha256": "613d509609055caf095b38a6ae731535f25c6d5b0c5385637e32ab314c2b0042"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/07-normal.png",
+            "sha256": "b74b41bd319d92f8c3bffae693c715695b04d7f5575cfb6ee889530687d1dcc7"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/08-albedo.png",
+            "sha256": "0d20ad0238ff10346808a90e1b0b373d70591d361752a1477b5929edb76a96c2"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/09-roughness.png",
+            "sha256": "631b8753179a259574f07bebd496818287ea2ef32867f23a685a3ee8a4dacf7e"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/10-geometry.png",
+            "sha256": "d1e26ac3e5afaace8fa6cb13a4d88a976bfd6ed1a9161f8829b4f557ba765a3b"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/11-height_page_level.png",
+            "sha256": "ab5f4ade9a0b1a3eac85a245b0bdc10209dbe8404adac8755b669f7e62b44a3d"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/12-footprint.png",
+            "sha256": "08eab77994f35998c6c1ccebed800c0634afdf3fce4645994cfe699f89a355d2"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/13-material_lod.png",
+            "sha256": "eb40d17cb5a31aa506e280573ecf5a93403dcf88986886c303692eadf484fa12"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/14-resolved_material_lod.png",
+            "sha256": "3142687750ed22eba99f8e475793e89b8e440652f6de9117f7097b271ba811ea"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/15-relief_weight.png",
+            "sha256": "49723eb63fadd4c2a82e14f6f3f3bc01f085cc01859a4ce499f3da1557bc7413"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/16-direct.png",
+            "sha256": "ed4d79cf12a340f4cb65f07cc7093fe07cb141e3a2cfbc35b7092ca16c27d51f"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/17-ambient.png",
+            "sha256": "d0552d6d3226b6af48243916d0fa752541574e7f6ada57ab083e979c712f0d01"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/18-specular.png",
+            "sha256": "54289c608d8cf9ba08abb1149d5c14a508235561cdc10139273a86a0e9e4b3b5"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/19-land_only.png",
+            "sha256": "63ca52af7ca81dfa41fb793dc42cdd64a9b302c251349dd90773e35e35abd2f7"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/source-roughness-fhd-030m/views/20-none.png",
+            "sha256": "a9f966c5e0d349f66dddb5471421dd3520d8a29870249c70eab2c5c4e7575502"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-page-after",
+        "image_count": 2,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-page-after/0-albedo.png",
+            "sha256": "d4a544fc05e907c56ef9fb6f0784ee1182e4eae733a0494047a0c57f795f87a9"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-page-after/0-normal.png",
+            "sha256": "ebeb440135e5f88ed0b68cf52b1c840bec4e358a02c004d1e898f78d4d72b10f"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-page-review",
+        "image_count": 1,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-page-review/review-all.png",
+            "sha256": "f0b752da5a7846fe67cb4f1600708e0555bb9d23f743e71f7ce55e425cbd1e6f"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-before",
+        "image_count": 2,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-before/0-albedo.png",
+            "sha256": "53638e2ebab4b616cfd8609d6fc946cde393b686022602ff6b9e033215db9c51"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-before/0-normal.png",
+            "sha256": "e8b06f76e7c4951f73486af37a5388d37d384e6dccb69e91ce8d93abe92065cb"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-after",
+        "image_count": 2,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-after/0-albedo.png",
+            "sha256": "79b00e6e1cd50c060cade2f0cd65c24e2b2ac503c78cca0d119ded3c5aa46268"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-after/0-normal.png",
+            "sha256": "ed0b5e715fa3a0b0db9eae31d660b00e32dcc842b55c21aea9af533750b1f008"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-review",
+        "image_count": 1,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-l25-review/review-all.png",
+            "sha256": "3a43b9424a688466aba00ca6799dfbd1035cfa0c73286fc792f288aaab5d781a"
+          }
+        ]
+      },
+      {
+        "folder": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m",
+        "image_count": 23,
+        "review": "root inspected complete sheets and native page/scene defects; Luna independently reviewed L25 pair and both native sequences",
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/full-fhd.png",
+            "sha256": "8afafd00d21524849d2b0dac12f1c1dd43b0fe117a35829a88fbef513636b7a7"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/review-all.jpg",
+            "sha256": "81f9cac2970885e38ff7d5a1afe60c07eac64c59ab9cef2cf6514b3e22f71540"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/00-none.png",
+            "sha256": "4ea1dd7be2e88a6a5886245586a916e7d7c6c0748e58bedeb1a0cf1ec2fb2875"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/01-none.png",
+            "sha256": "8afafd00d21524849d2b0dac12f1c1dd43b0fe117a35829a88fbef513636b7a7"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/02-none.png",
+            "sha256": "4ea1dd7be2e88a6a5886245586a916e7d7c6c0748e58bedeb1a0cf1ec2fb2875"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/03-none.png",
+            "sha256": "8afafd00d21524849d2b0dac12f1c1dd43b0fe117a35829a88fbef513636b7a7"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/04-water_weight.png",
+            "sha256": "9aa0cd60c4c8f04481e3843b6ca8cc103ae53d72a7ccb3b59c87c081aa4fef4a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/05-height.png",
+            "sha256": "2797b17f555f1d07e39c69a6058d77c3586b3cae753e0bf3a0b2ff90773d20e8"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/06-distance.png",
+            "sha256": "c131519af6f4f074e9c0f5c80da8a633d8e9894e683b227ca8ec0c2d7e8ae46f"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/07-normal.png",
+            "sha256": "4c9c10b0a8ba2ba422c0529b8d3e185b1058f3adc5e8ed2a973c23b4dedb7959"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/08-albedo.png",
+            "sha256": "9f6cb8ad34240d41ca80d5133c18ca763830a68f78aa147034d97653c9e07892"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/09-roughness.png",
+            "sha256": "b978a4e5dd69b417a186b436fac40b86a995447f5f231f7e9d8f82436630ccd1"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/10-geometry.png",
+            "sha256": "d18b22eb2ff4a7328ab739cff79898de247354d2555091e218ba0d21efe242db"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/11-height_page_level.png",
+            "sha256": "46611545d8fdab16efde854108d2feb7d42f0f3accc4d7b6fc867abd19bc63d9"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/12-footprint.png",
+            "sha256": "f8a3e4186919127e88364647d09c9a02e77fc150c9d4f9d33cf47879d2b0f788"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/13-material_lod.png",
+            "sha256": "3f11d1a84d6142f86fa967df5300fe2f567cd3de422111dbd8c37ce964800683"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/14-resolved_material_lod.png",
+            "sha256": "d95887f842de61ed9f506daeff0ceec9b1a249fce4c2c7289e6ad64d65600551"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/15-relief_weight.png",
+            "sha256": "32361059114f1fd1f772c51366b69c8cad99c7430ac1599227cfbf4a8a54e16b"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/16-direct.png",
+            "sha256": "a284513b31f27872584a4f8af752bb472e4be86b383ade53fca7ccfcaae0a184"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/17-ambient.png",
+            "sha256": "60835db87861b7980ec5da89d3b131023972aca1921fe0f0c692ec277802bd4f"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/18-specular.png",
+            "sha256": "f62d17ef0c2a815c045f3fe62b65a29c3acd630d4579f5cfaea295e0e9304e60"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/19-land_only.png",
+            "sha256": "86ae5e91b3936d9f9aa5b71f2cdb991a52a3a4879970184f7cb11acec203dfe1"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/litter-native-fhd-030m/views/20-none.png",
+            "sha256": "8afafd00d21524849d2b0dac12f1c1dd43b0fe117a35829a88fbef513636b7a7"
+          }
+        ]
+      }
+    ],
+    "root": "All emitted images inspected. L25 page retains finer leaf and slope features; broad native soil smear/striations remain. Roughness-only whole-scene effect small. No new obvious blocking artifact.",
+    "independent_reviewer": "/root/luna_ground_iterations",
+    "independent_decision": "retain bounded source-channel and bandwidth improvement only; no broad soil acceptance",
+    "page_size_correction": "All actual pages128x128; RGBA8 albedo65536bytes and RG8_SNORM normals32768bytes. Reviewer intermediate64x64 remark corrected; final decision unaffected.",
+    "native_fixed_conditions": "FHD1920x1080, MSAA4, High, RTOff, TAAOff,0.3m eye, fixed simulation time74566.63966240163,20s prestream",
+    "per_run_frozen_controls": "geometry/depth/beauty round trip preserved",
+    "whole_scene_exact_ab": false,
+    "blind_preference_accepted": false,
+    "performance_equivalent": false,
+    "capture_provenance_review_label": "Original generic capture labels remain hashed; this completed review supersedes pending labels without altering source records",
+    "source_literal_note": "After capture, four f32 mean literals normalized to Clippy spelling; struct.pack equality verifies identical f32 bits. Final strict mean test rerun."
+  },
+  "cost": {
+    "additional_retained_cpu_scalar_bytes": 29360128,
+    "cpu_mib": 28,
+    "breakdown_mib": {
+      "color_roughness_height_source": 20,
+      "normal_residual": 8
+    },
+    "excludes": [
+      "allocator overhead",
+      "temporary decode buffers"
+    ],
+    "packed_before_bytes": 2151183,
+    "packed_after_bytes": 8771365,
+    "packed_increase_bytes": 6620182,
+    "gpu_cache_budgets_changed": false,
+    "gpu_sample_counts_changed": false,
+    "release_frame_timing_measured": false
+  },
+  "unchanged": [
+    "physical source repeats and authored height ranges",
+    "source random phases/rotations",
+    "source selection mixture",
+    "soil/moss dimensions",
+    "shared shader and sampler",
+    "graphics quality/fallback ownership",
+    "GPU passes/bindings/page formats/budgets",
+    "CBT topology algorithm",
+    "exposure and vegetation population"
+  ],
+  "open": [
+    "broad foreground soil smear and streaks",
+    "source physical calibration",
+    "temporal stability and general grazing/minification filtering",
+    "close foliage/contact defects",
+    "full-scene parity and release cost acceptance"
+  ],
+  "gpu_oracle_binary": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/target/debug/deps/material-25efa74e3f3a3a49",
+    "sha256": "173edcf593cea260537e1e1a78f557ea05f4b268419625698b2dea53a23ab831"
+  }
+}

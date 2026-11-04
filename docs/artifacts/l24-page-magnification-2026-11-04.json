@@ -1,0 +1,27 @@
+{
+  "baseline": "c20503e",
+  "reference": "OpenEngine bdf5c2710fe37c1c5ddbac7787477daa87524af3, Engine/Modules/CBTTerrain/Shaders/CBT/cbt_surface_pages.glsl:94-109,130-139",
+  "hardware": "AMD Radeon880M/RADVSTRIX1 isolated renderD128",
+  "test": "l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals",
+  "signals": "RGB linear-light cosine signals with periods2/4/8 page texels, encoded sRGB then independently bilinear decoded on CPU",
+  "faces": [
+    1,
+    4
+  ],
+  "nominal_footprints_m": [
+    0.000734,
+    0.0016
+  ],
+  "phase_offsets_per_case": 9,
+  "channel_comparisons": 108,
+  "tolerance_srgb_codes": 2,
+  "result": "passed",
+  "log_path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/l24-page-filter-final.log",
+  "log_sha256": "996b50c43eb97e57e364e002b7c34acc1c969de8f9a5a030ebc472549b298af9",
+  "limits": [
+    "Nominal perspective footprints, not direct GPU within-page mip readback.",
+    "Controlled isotropic magnification; not general grazing/minification filtering acceptance.",
+    "No change to source material bandwidth or production appearance.",
+    "No timing or reference-quality claim."
+  ]
+}

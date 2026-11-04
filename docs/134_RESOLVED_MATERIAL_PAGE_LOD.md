@@ -68,7 +68,8 @@ The FHD B03 camera at 0.3 m completed all 21 frozen views. Depth, beauty round
 trip and published geometry are identical. The complete sheet and native-resolution
 albedo/normal defects were inspected. Both albedo and normal remain visibly smeared.
 In the bottom-third ROI (656,599 covered terrain pixels), requested page LOD has
-median 24 and resolved LOD has median 23.9883 (RGBA16Float rounding of 24/24).
+median 24 and resolved LOD has median 23.9883 (near 24 at the raw
+RGBA16Float output precision).
 Only 0.1846% have a requested/resolved gap above half a level, and 0.1255% above
 one level. Height coverage is 0.9995–1.0. Thus missing fine material ancestors
 are **not the dominant albedo-blur cause in this captured frame**. This conclusion
@@ -82,3 +83,23 @@ proof that simply increasing source/page resolution fixes all visible streaks.
 Audit source bandwidth and within-page mips independently before implementing
 another soil change. [The evidence record](artifacts/resolved-material-lod-2026-11-04.json)
 contains image/log hashes, raw-channel ROI statistics and the explicit limitations.
+
+## Controlled within-page magnification check
+
+Pinned OpenEngine `cbt_surface_pages.glsl:94–109,130–139` uses physical footprint
+for page selection and explicit bilinear cache taps. This informs an independent
+sampler oracle, not a production LOD0 override. A synthetic L24 page carries
+linear-light RGB cosine signals at 2/4/8 texel periods. Faces 1/4, nominal perspective
+footprints 0.734/1.600 mm and nine subtexel shifts produce 108 channel comparisons
+against CPU bilinear sampling of the immutable mip-0 bytes. All pass on RADV 880M
+with unchanged two-code tolerance. The shortest signal is cosine rather than a
+Nyquist sine that would vanish at the source texel centers. High ground detail
+is explicitly enabled so the material request is not clamped to L17.
+
+This controlled magnification case does not show an extra GPU filter blur beyond
+bilinear interpolation. Its footprints are analytic camera targets; it is not
+a direct hardware-mip readback or general grazing/minification acceptance.
+The production source/page bandwidth remains unchanged and the soil is not fixed.
+[The test record](artifacts/l24-page-magnification-2026-11-04.json) pins the log and
+scope. The next candidate must address the measured bandwidth limit and receive
+actual-scene visual review; extra contrast or sharpen alone is not accepted.

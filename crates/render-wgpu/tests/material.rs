@@ -1207,3 +1207,189 @@ fn resolved_material_lod_reports_parent_fallback_and_missing_pages() {
         .unwrap();
     assert_eq!(resolved(&renderer), [255, 0, 255, 255]);
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; controlled L24 texture-filter oracle"]
+fn l24_page_magnification_matches_linear_cpu_bilinear_for_periodic_signals() {
+    let backend = Backend::bring_up().expect("requires the local hardware adapter");
+    const SIZE: u32 = 65;
+    const PAGE_SIDE: usize = 128;
+    const PAGE_CELLS: f64 = 125.0;
+    const RADIUS_M: f64 = 3_200_000.0;
+    const VIEW_DISTANCE_M: f64 = 2.0;
+    let footprints_m = [0.000_734, 0.001_600];
+    let periods = [2.0, 4.0, 8.0];
+    let srgb_to_linear = |byte: u8| {
+        let value = f64::from(byte) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let linear_to_srgb_byte = |value: f64| {
+        let encoded = if value <= 0.003_130_8 {
+            12.92 * value
+        } else {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        };
+        (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+
+    // Independent channels carry known linear-light cosine waves. The test
+    // samples the GPU page at subtexel offsets and predicts mip-0 bilinear
+    // values from the immutable page bytes, without reproducing WGSL logic.
+    let rgba: Vec<u8> = (0..PAGE_SIDE * PAGE_SIDE)
+        .flat_map(|i| {
+            let x = i % PAGE_SIDE;
+            let channels = periods
+                .map(|period| 0.5 + 0.35 * (std::f64::consts::TAU * x as f64 / period).cos());
+            channels.map(linear_to_srgb_byte).into_iter().chain([255])
+        })
+        .collect();
+    let material = CbtMaterialPage::from_rgba8(rgba).unwrap();
+    let mip0 = &material.mips()[0];
+    assert_eq!(mip0.len(), PAGE_SIDE * PAGE_SIDE * 4);
+
+    // L24 is effectively a 3.05 mm page lattice at this radius. Both target
+    // footprints stay below one page texel, so their declared within-page
+    // mip is zero; the larger case approaches half a texel per pixel.
+    let page_pitch_m = 2.0 * RADIUS_M / 2_f64.powi(24) / PAGE_CELLS;
+    assert!((0.003_04..0.003_07).contains(&page_pitch_m));
+    for footprint in footprints_m {
+        let mip = (footprint / page_pitch_m).max(1.0).log2();
+        assert_eq!(mip, 0.0, "fixture must exercise mip-0 magnification");
+    }
+
+    let cpu_bilinear = |texel_x: f64| -> [f64; 3] {
+        let x0 = texel_x.floor() as usize;
+        let t = texel_x.fract();
+        std::array::from_fn(|channel| {
+            let a = srgb_to_linear(mip0[(63 * PAGE_SIDE + x0) * 4 + channel]);
+            let b = srgb_to_linear(mip0[(63 * PAGE_SIDE + x0 + 1) * 4 + channel]);
+            a * (1.0 - t) + b * t
+        })
+    };
+
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.01).unwrap();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        surface_quality: thessa_graphics::Quality::High,
+        terrain_debug_view: thessa_graphics::TerrainDebugView::Albedo,
+        terrain_material_anisotropy: 1,
+        terrain_normal_maps: false,
+        terrain_ground_detail: true,
+        specular_reflections: false,
+        shadow_enabled: false,
+        ..Default::default()
+    };
+    let target = OffscreenTarget::new(&backend, SIZE, SIZE).unwrap();
+    for face in [1, 4] {
+        // Child path 3/3 places the L24 sample within half a tile of the face
+        // centre, where the chart's physical texel pitch matches the oracle.
+        let geometry = TileKey::new(face, 22, 2_097_151, 2_097_151).unwrap();
+        let fine = TileKey::new(face, 24, geometry.x * 4 + 3, geometry.y * 4 + 3).unwrap();
+        let geometry_anchor = TileAnchor::new(geometry, RADIUS_M).unwrap();
+        let fine_anchor = TileAnchor::new(fine, RADIUS_M).unwrap();
+        let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+            &backend,
+            &[TerrainPatch {
+                anchor: geometry_anchor,
+                page: &height,
+            }],
+            OffscreenTarget::FORMAT,
+            thessa_render_wgpu::terrain::TerrainCapacity {
+                patches: 1,
+                material_layers: 1,
+                height_grid_size: 2,
+            },
+            Some(&settings),
+        )
+        .unwrap();
+        renderer
+            .update_lighting(
+                &backend,
+                &SurfaceLighting {
+                    ambient_lux: [std::f32::consts::PI; 4],
+                    directions: [[0.0; 4]; 3],
+                    colors_lux: [[0.0; 4]; 3],
+                },
+            )
+            .unwrap();
+        let geometry_id = thessa_rcbt_core::conforming_surface::page_id(geometry).unwrap();
+        let fine_id = (geometry_id << 4) | 0x0f;
+        let pages = [(fine_id, (1, material.clone()))].into_iter().collect();
+        renderer
+            .update_materials(&backend, &[fine_id], &pages)
+            .unwrap();
+
+        for footprint_m in footprints_m {
+            // At the centre of a 65 px perspective view, this FOV gives the
+            // requested analytic ground footprint: 2*d*tan(fov/2)/SIZE.
+            let fov = 2.0 * (footprint_m * f64::from(SIZE) / (2.0 * VIEW_DISTANCE_M)).atan();
+            let achieved = 2.0 * VIEW_DISTANCE_M * (fov * 0.5).tan() / f64::from(SIZE);
+            assert!((achieved / footprint_m - 1.0).abs() < 1e-12);
+            let mut actual: Vec<[f64; 3]> = Vec::new();
+            let mut expected: Vec<[f64; 3]> = Vec::new();
+            for half_texel_step in -4..=4 {
+                let shift_texels = f64::from(half_texel_step) * 0.5;
+                let local_u = 0.5 + shift_texels / PAGE_CELLS;
+                let center = DVec3::from(fine_anchor.project_body_m([local_u, 0.5], 0.0));
+                let eye = center + DVec3::from(fine_anchor.normal) * VIEW_DISTANCE_M;
+                let view = ViewParams {
+                    world_from_view: glam::dcamera::rh::view::look_at_mat4(
+                        eye,
+                        center,
+                        DVec3::from(fine_anchor.raw_axis_v),
+                    )
+                    .inverse(),
+                    clip_from_view: glam::dcamera::rh::proj::directx::perspective(
+                        fov, 1.0, 0.01, 1000.0,
+                    ),
+                    world_position_m: eye,
+                    exposure: 1.0,
+                };
+                renderer.update_view(&backend, &view).unwrap();
+                let mut encoder = backend.device.create_command_encoder(&Default::default());
+                renderer.encode(&mut encoder, &target.color, &target.depth);
+                backend.queue.submit([encoder.finish()]);
+                let frame = target.read_rgba8(&backend).unwrap();
+                let pixel = &frame[(32 * SIZE as usize + 32) * 4..][..4];
+                actual.push(std::array::from_fn(|channel| {
+                    srgb_to_linear(pixel[channel])
+                }));
+
+                // The shader maps page-local u to index `local_u*125 + 1`
+                // in the 128² layer. The centre pixel is at the target point.
+                expected.push(cpu_bilinear(local_u * PAGE_CELLS + 1.0));
+            }
+            let mut max_code_error = 0u8;
+            for channel in 0..3 {
+                let expected_range = expected
+                    .iter()
+                    .map(|sample| sample[channel])
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), value| {
+                        (lo.min(value), hi.max(value))
+                    });
+                assert!(
+                    expected_range.1 - expected_range.0 > 0.10,
+                    "period {} channel needs a visible signal: face={face}, footprint={footprint_m}m",
+                    periods[channel]
+                );
+                for (sample, reference) in actual.iter().zip(&expected) {
+                    let expected_srgb = linear_to_srgb_byte(reference[channel]);
+                    let actual_srgb = linear_to_srgb_byte(sample[channel]);
+                    max_code_error = max_code_error.max(actual_srgb.abs_diff(expected_srgb));
+                    assert!(
+                        actual_srgb.abs_diff(expected_srgb) <= 2,
+                        "face={face}, footprint={footprint_m}m, period={} texels: actual={actual_srgb}, expected={expected_srgb}",
+                        periods[channel]
+                    );
+                }
+            }
+            eprintln!(
+                "L24 magnification face={face} nominal_footprint_m={footprint_m} phases={} periods={periods:?} max_srgb_code_error={max_code_error}",
+                actual.len()
+            );
+        }
+    }
+}

@@ -98,3 +98,10 @@ and restores the litter scan to native 1K across color, roughness, height and
 normal planes. Soil/moss stay 2K; GPU page/cache budgets are unchanged. The
 extra CPU source pyramids cost 28 MiB. Matched L25 pages show finer source
 features, while broad foreground smear and reference acceptance remain open.
+
+[Registered scan composition](138_REGISTERED_GROUND_MATERIAL.md) supersedes the earlier
+brightness-derived humus/mineral grade and duplicate flat litter coat. Scanned
+soil/litter now retain their albedo/roughness detail beneath the existing wetness
+and moss layers; normal/base/water page controls remain identical. Independent
+review retains this material slice, with broad close-ground smear and full-scene
+reference acceptance still open. No persistent memory or GPU work is added.

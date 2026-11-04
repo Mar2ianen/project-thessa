@@ -1548,10 +1548,28 @@ mod lod_fade_tests {
             mat.albedo_srgb[1] > mat.albedo_srgb[2],
             "green must exceed blue"
         );
+        // The scanned floor can be rougher than the old flat 0.75 litter
+        // coat. Its declared source endpoints bound the combined response.
+        let bare = surface_appearance_with_ground_detail(&field, &sample, dir, 0.01, true, None).0;
+        let canopy = crate::ecology::vegetation_cover(&sample, sample.slope_hint).canopy01;
+        let floor = crate::ground_detail::forest_floor(
+            ground,
+            dir.map(|v| v * field.params.radius_m),
+            field.params.seed,
+            0.01,
+            smooth(0.35, 0.95, sample.moisture01),
+            canopy,
+        );
+        let lo = bare.roughness.min(floor.roughness);
+        let hi = bare.roughness.max(floor.roughness);
         assert!(
-            mat.roughness < 0.85,
-            "wet soil must retain its optical roughness response: {}",
+            (lo..=hi).contains(&mat.roughness),
+            "scanned floor roughness {} outside source endpoints [{lo}, {hi}]",
             mat.roughness
+        );
+        assert!(
+            (mat.roughness - bare.roughness).abs() > 1e-5,
+            "declared floor must contribute its source roughness"
         );
     }
 }

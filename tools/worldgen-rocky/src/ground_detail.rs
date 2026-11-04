@@ -61,11 +61,11 @@ pub(crate) fn encode_srgb(v: f64) -> f64 {
     }
 }
 
-/// Last mip after intrinsic forest-substrate processing. Coarse pages use the
-/// same material mean, not legacy canopy colour. Pinned against the asset below.
+/// Last mip of the decoded scan. Coarse pages use the same source material
+/// mean as fine pages. Pinned against the asset below.
 fn swatch_mean() -> GroundSample {
     GroundSample {
-        albedo_linear: [0.106332146, 0.075658605, 0.04803002],
+        albedo_linear: [0.1558859, 0.11072619, 0.066067934],
         roughness: 0.90076196,
         height_m: -0.00685546,
     }
@@ -89,7 +89,6 @@ impl Texture {
             include_bytes!("../../../assets/textures/forest-ground-04.bin.gz"),
             SOIL_SIDE,
             HEIGHT_RANGE_M,
-            true,
         )
     }
     fn decode_litter() -> Self {
@@ -97,7 +96,6 @@ impl Texture {
             include_bytes!("../../../assets/textures/mud-litter-01.bin.gz"),
             LITTER_SIDE,
             LITTER_HEIGHT_RANGE_M,
-            false,
         )
     }
 
@@ -106,10 +104,9 @@ impl Texture {
             include_bytes!("../../../assets/textures/forest-moss-litter-02.bin.gz"),
             MOSS_SIDE,
             MOSS_HEIGHT_RANGE_M,
-            false,
         )
     }
-    fn decode_source(bytes: &[u8], side: usize, height_range_m: f32, transfer: bool) -> Self {
+    fn decode_source(bytes: &[u8], side: usize, height_range_m: f32) -> Self {
         let raw_bytes = 8 + side * side * 6;
         let mut raw = Vec::new();
         flate2::read::GzDecoder::new(bytes)
@@ -127,13 +124,9 @@ impl Texture {
             .0
             .iter()
             .map(|p| {
-                let rgb = std::array::from_fn(|i| decode_srgb(f64::from(p[i]) / 255.0) as f32);
+                let rgb: [f32; 3] =
+                    std::array::from_fn(|i| decode_srgb(f64::from(p[i]) / 255.0) as f32);
                 let roughness = f32::from(p[3]) / 255.0;
-                let (rgb, roughness) = if transfer {
-                    forest_substrate(rgb, roughness)
-                } else {
-                    (rgb, roughness)
-                };
                 [
                     rgb[0],
                     rgb[1],
@@ -385,25 +378,6 @@ fn sample_moss(q: [f64; 3], seed: u64, texel_m: f64) -> GroundSample {
     )
 }
 
-// Transform intrinsic pigment/mineral response before filtering: applying a
-// nonlinear brightness mask to an already averaged texel changes its mean.
-fn forest_substrate(rgb: [f32; 3], roughness: f32) -> ([f32; 3], f32) {
-    let luminance = |v: [f32; 3]| {
-        0.2126 * f64::from(v[0]) + 0.7152 * f64::from(v[1]) + 0.0722 * f64::from(v[2])
-    };
-    let mineral = crate::appearance::smooth(
-        0.90,
-        1.35,
-        luminance(rgb) / luminance([0.15293027, 0.10844741, 0.06403417]),
-    );
-    let color = std::array::from_fn(|i| {
-        let absorption = [0.28, 0.24, 0.25][i];
-        (f64::from(rgb[i]) * (absorption + (1.0 - absorption) * mineral)) as f32
-    });
-    // Pigment grading does not replace the independent roughness scan.
-    (color, roughness)
-}
-
 /// Body-fixed optical cover, not authoritative water storage or moss biology.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GroundCover {
@@ -500,36 +474,28 @@ pub(crate) fn forest_floor(
         cover_and_moss(q, seed, texel_m, damp, canopy, f64::from(ground.height_m));
     let wet = cover.wetness;
     let moss = cover.moss;
-    let coarse_litter =
-        smooth(0.08, 0.58, noise(6142, 1.6, true)) * (0.40 + 0.60 * smooth(0.04, 0.25, canopy));
-    let fine_litter =
-        smooth(0.12, 0.62, noise(6151, 0.45, true)) * (0.35 + 0.65 * smooth(0.02, 0.20, canopy));
-    let litter = (coarse_litter * 0.50 + fine_litter * 0.45).clamp(0.0, 0.76);
     let albedo_linear = std::array::from_fn(|i| {
         let wet_darkening = [0.65, 0.65, 0.58][i];
         let mineral_factor = 1.0 + mineral_patch * 0.10 + fine_mineral * [0.10, 0.12, 0.20][i];
         let substrate =
             f64::from(ground.albedo_linear[i]) * mineral_factor * (1.0 - wet * wet_darkening);
-        // Pigment coverage retains scan contrast instead of painting a flat swatch.
-        let texture_detail = (f64::from(ground.albedo_linear[i])
-            / f64::from(mean_sample().albedo_linear[i]))
-        .clamp(0.5, 1.5);
+        // The source already contains measured litter; retain its registered
+        // colour instead of covering it with a second flat litter material.
         let moss_albedo = f64::from(moss_texture.albedo_linear[i] * MOSS_GRADE[i]);
         let covered = substrate * (1.0 - moss) + moss_albedo * moss;
-        let litter_albedo = [0.048, 0.038, 0.024][i] * texture_detail;
-        (covered * (1.0 - litter) + litter_albedo * litter).clamp(0.0, 1.0) as f32
+        covered.clamp(0.0, 1.0) as f32
     });
     let dry = f64::from(ground.roughness);
     // Authored porous-soil prior; moisture alone does not supply a smooth water film.
     // Wet porous soil stays rough; only explicit basin geometry receives a
-    // water-like smooth BRDF. Wetness darkens and broadens highlights without
-    // turning the whole substrate into a polished film.
+    // water-like smooth BRDF. Pigment darkening does not require turning
+    // the whole substrate into a polished film.
     let wet_soil_roughness = 0.88 * (1.0 - fine_mineral * 0.08);
     let wet_roughness = dry * (1.0 - wet) + wet_soil_roughness * wet;
     let moss_roughness = wet_roughness * (1.0 - moss) + f64::from(moss_texture.roughness) * moss;
     GroundSample {
         albedo_linear,
-        roughness: (moss_roughness * (1.0 - litter) + 0.75 * litter).clamp(0.22, 0.98) as f32,
+        roughness: moss_roughness.clamp(0.22, 0.98) as f32,
         // Optical pigments/wetness do not amplify the scan's physical slope.
         height_m: ground.height_m,
     }
@@ -689,9 +655,9 @@ mod tests {
     }
 
     #[test]
-    fn pigment_transfer_preserves_the_independent_scan_roughness_plane() {
-        // The FG01 roughness plane, not the diffuse photograph's brightness,
-        // is the source of dry substrate microfacet roughness.
+    fn soil_decode_preserves_source_reflectance_roughness_and_height() {
+        // Published scan reflectance is the dry substrate endpoint; later
+        // wetness/cover layers own their separate material response.
         let texture = Texture::decode();
         let mut raw = Vec::new();
         flate2::read::GzDecoder::new(
@@ -700,37 +666,76 @@ mod tests {
         .read_to_end(&mut raw)
         .unwrap();
         for (pixel, source) in texture.0[0].pixels.iter().zip(raw[8..].as_chunks::<6>().0) {
-            assert_eq!(pixel[3], f32::from(source[3]) / 255.0);
-        }
-        for roughness in [0.0, 0.1, 0.5, 0.9, 1.0] {
-            for brightness in [0.0, 0.01, 0.1, 0.5, 1.0] {
-                assert_eq!(forest_substrate([brightness; 3], roughness).1, roughness);
+            for i in 0..3 {
+                let encoded = (encode_srgb(f64::from(pixel[i])) * 255.0).round() as u8;
+                assert_eq!(encoded, source[i], "source reflectance channel {i}");
             }
+            assert_eq!(pixel[3], f32::from(source[3]) / 255.0);
+            let height = f32::from(u16::from_le_bytes([source[4], source[5]]));
+            assert_eq!(pixel[4], (height / 65535.0 - 0.5) * HEIGHT_RANGE_M);
         }
     }
 
     #[test]
-    fn mineral_transfer_is_continuous_before_mip_averaging() {
-        let raw_mean = [0.15293027, 0.10844741, 0.06403417];
-        let mut previous: Option<([f32; 3], f32)> = None;
-        for step in 0..=2000 {
-            let rgb = raw_mean.map(|v| v * (0.5 + step as f32 / 2000.0));
-            let current = forest_substrate(rgb, 0.9);
-            if let Some(previous) = previous {
-                for (a, b) in current.0.into_iter().zip(previous.0) {
-                    assert!((a - b).abs() < 0.001);
-                }
-                assert!((current.1 - previous.1).abs() < 0.001);
-            }
-            previous = Some(current);
+    fn source_mips_average_linear_reflectance_without_brightness_classification() {
+        use std::io::Write;
+        let mut raw = b"FG01".to_vec();
+        raw.extend(2_u32.to_le_bytes());
+        for value in [64, 192, 192, 64] {
+            raw.extend([value, value, value, 230, 0, 128]);
         }
-        let dark = forest_substrate(raw_mean.map(|v| v * 0.5), 0.9);
-        let bright = forest_substrate(raw_mean.map(|v| v * 1.5), 0.9);
-        let wrong = forest_substrate(raw_mean, 0.9);
-        assert!(
-            ((dark.0[0] + bright.0[0]) * 0.5 - wrong.0[0]).abs() > 0.03,
-            "filtering before the nonlinear transfer loses the stone fraction"
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Default::default());
+        encoder.write_all(&raw).unwrap();
+        let packed = encoder.finish().unwrap();
+        let texture = Texture::decode_source(&packed, 2, HEIGHT_RANGE_M);
+        // IEC sRGB64=0.051269458, sRGB192=0.527115126; their linear mean
+        // is neither the encoded-byte mean nor a classified mineral fraction.
+        for channel in &texture.0[1].pixels[0][..3] {
+            assert!((channel - 0.289_192_3).abs() < 1e-7);
+        }
+        assert_eq!(texture.0[1].pixels[0][3], 230.0 / 255.0);
+    }
+
+    #[test]
+    fn dry_floor_retains_scan_contrast_and_roughness_without_a_second_litter_coat() {
+        let mut roughness_failures = 0;
+        let mut contrast_failures = 0;
+        for i in 0..32 {
+            let q = [137.0 + f64::from(i) * 0.37, 29.0, -18.0];
+            let source = GroundSample {
+                albedo_linear: [0.12, 0.08, 0.04],
+                roughness: 0.9,
+                height_m: 0.0,
+            };
+            let reference = forest_floor(source, q, 77, 0.001, 0.0, 0.8);
+            roughness_failures += usize::from(reference.roughness != source.roughness);
+            for scale in [0.0, 0.1, 0.5, 1.8] {
+                let floor = forest_floor(
+                    GroundSample {
+                        albedo_linear: source.albedo_linear.map(|v| v * scale),
+                        ..source
+                    },
+                    q,
+                    77,
+                    0.001,
+                    0.0,
+                    0.8,
+                );
+                for (actual, expected) in floor
+                    .albedo_linear
+                    .into_iter()
+                    .zip(reference.albedo_linear.map(|v| v * scale))
+                {
+                    contrast_failures +=
+                        usize::from(!actual.is_finite() || (actual - expected).abs() >= 1e-7);
+                }
+                assert_eq!(floor.height_m, source.height_m);
+            }
+        }
+        eprintln!(
+            "dry floor: roughness failures={roughness_failures}/32, contrast failures={contrast_failures}/384"
         );
+        assert_eq!((roughness_failures, contrast_failures), (0, 0));
     }
 
     #[test]
@@ -796,7 +801,7 @@ mod tests {
     fn damp_moss_forms_resolved_patches_and_preserves_partial_substrate_contrast() {
         let mean = mean_sample();
         let mut green_ratio = [f32::INFINITY, 0.0_f32];
-        let mut patch = [0.0; 3];
+        let mut partial_patch = None;
         for i in 0..400 {
             let q = [
                 137.0 + (i % 20) as f64 * 0.13,
@@ -804,11 +809,14 @@ mod tests {
                 -18.0 + (i / 20) as f64 * 0.13,
             ];
             let floor = forest_floor(mean, q, 77, 0.012, 0.9, 0.6);
+            let coverage = cover(q, 77, 0.012, 0.9, 0.6, f64::from(mean.height_m)).moss;
+            if (0.25..=0.5).contains(&coverage) {
+                partial_patch = Some(q);
+            }
             let ratio = floor.albedo_linear[1] / floor.albedo_linear[0];
             green_ratio[0] = green_ratio[0].min(ratio);
             if ratio > green_ratio[1] {
                 green_ratio[1] = ratio;
-                patch = q;
             }
         }
         assert!(
@@ -819,6 +827,9 @@ mod tests {
             green_ratio[1] - green_ratio[0] > 0.2,
             "coverage must be spatially varied"
         );
+        // Substrate contrast is meaningful at partial coverage, not at the
+        // maximum-green (potentially opaque moss) point selected above.
+        let patch = partial_patch.expect("fixture must include actual partial moss coverage");
         let dark = forest_floor(
             GroundSample {
                 albedo_linear: mean.albedo_linear.map(|v| v * 0.8),

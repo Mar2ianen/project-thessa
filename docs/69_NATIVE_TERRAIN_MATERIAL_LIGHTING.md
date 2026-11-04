@@ -2,6 +2,12 @@
 
 **Status: implemented primary-raster material normals, rough sky reflection and finite grazing GGX energy coupling; terrain visual acceptance incomplete.**
 
+Current ground composition (2026-11-04): the registered soil/litter scans supply
+albedo and roughness beneath existing wetness/moss layers. The RGB-brightness
+classifier and second flat litter coat are removed by
+[doc 138](138_REGISTERED_GROUND_MATERIAL.md). Historical WORLD checkpoints below
+retain their dated priors; broad close-soil smear and reference acceptance remain open.
+
 WORLD115 (doc 77) audits the subsequent Gemini forest-floor changes. Canopy
 coverage still selects authored moss/litter cover, but no longer multiplies
 bare substrate reflectance by an illumination factor. This removes the baked
@@ -164,10 +170,12 @@ CPU source, bounded worker jobs and 256 GPU layers are unchanged. Captures expos
 
 ## Ground optical material foundation (WORLD12; extended in doc 77)
 
-The optional scan is processed into continuous humus/mineral reflectance and
-roughness before mip averaging, preserving the same processed-material mean
-across levels. One shared forest-floor evaluation adds moisture, moss and litter
-optics. Canonical ecological cover and later substrate/cover layers retain
+The optional soil/litter scans now retain their supplied reflectance and
+roughness through linear-light mip generation. One shared forest-floor evaluation
+adds moisture, mineral modifiers and moss optics. The actual scanned litter
+mixture owns litter detail; source-brightness classification and the second flat
+brown/0.75-roughness litter coat are removed by
+[doc 138](138_REGISTERED_GROUND_MATERIAL.md). Canonical ecological cover and later substrate/cover layers retain
 ownership. The source height is a single authored 60 mm relative range at a
 3.15 m repeat; physical chart differences produce the normal without secondary
 slope gain. These are uncalibrated optical priors, not pebble geometry, ambient

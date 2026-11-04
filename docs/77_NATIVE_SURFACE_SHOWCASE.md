@@ -3495,3 +3495,10 @@ This is a bandwidth/addressing slice: actual 0.3 m FHD images retain broad smear
 GPU caches remain bounded, and CPU source caches add 224 MiB. Reference and release
 performance acceptance remain open; historical WORLD records keep their original
 counts and source versions.
+
+[Registered scan composition](138_REGISTERED_GROUND_MATERIAL.md) supersedes the earlier
+brightness-derived humus/mineral grade and duplicate flat litter coat. Scanned
+soil/litter now retain their albedo/roughness detail beneath the existing wetness
+and moss layers; normal/base/water page controls remain identical. Independent
+review retains this material slice, with broad close-ground smear and full-scene
+reference acceptance still open. No persistent memory or GPU work is added.

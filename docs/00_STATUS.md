@@ -1064,3 +1064,9 @@ visual review pass; broad soil blur and full-scene parity remain open.
 scan roughness and restores native 1K litter color/roughness/height/normals.
 The matched L25 pages retain finer detail; full-scene soil smear remains open.
 CPU source data grows 28 MiB, with unchanged GPU page budgets and no speedup claim.
+
+[Registered ground material](138_REGISTERED_GROUND_MATERIAL.md) removes
+source-brightness mineral classification and the second flat litter coat, retaining
+actual scan albedo/roughness through the existing wetness/moss layers. Fixed-page
+controls, 307 worldgen tests and full native visual review pass; broad close-soil
+smear remains open. No persistent memory or GPU work is added; timing is unmeasured.

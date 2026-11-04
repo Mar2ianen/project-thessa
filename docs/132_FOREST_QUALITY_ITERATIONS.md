@@ -11,7 +11,7 @@ and verification. A researched item is not an implemented or visually accepted i
 | 3 | [Leaf transport](forest-quality/03_LEAF_LIGHT.md) | Shared mesh GGX black-patch correction verified; directional scattering lobe and scene acceptance open |
 | 4 | [Tree architecture](forest-quality/04_TREE_ARCHITECTURE.md) | Single/forked morphotypes now weighted 65/25/10; new architecture open |
 | 5 | [Forest depth](forest-quality/05_FOREST_DEPTH.md) | Existing spherical haze audited; finite-path integration open |
-| 6 | [Soil detail scale](forest-quality/06_SOIL_SCALE.md) | 0.3 m diagnostic camera enabled; material/normal analysis open |
+| 6 | [Soil detail scale](forest-quality/06_SOIL_SCALE.md) | 0.3 m resolved-page audit rejects dominant albedo ancestor fallback; source/mip detail open |
 | 7 | [Shoreline](forest-quality/07_SHORE.md) | Water/depth/ecology owners audited; coherent shoreline open |
 
 ## Cattail step carried into the campaign

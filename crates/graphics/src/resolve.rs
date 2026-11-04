@@ -2767,6 +2767,7 @@ mod terrain_diagnostic_tests {
             ("direct", V::Direct, 13),
             ("ambient", V::Ambient, 14),
             ("specular", V::Specular, 15),
+            ("resolved_material_lod", V::ResolvedMaterialLod, 16),
         ] {
             let requested =
                 RequestedGraphics::from_toml(&format!("[debug]\nterrain_view = \"{name}\"\n"))

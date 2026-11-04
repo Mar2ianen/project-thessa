@@ -684,6 +684,7 @@ pub enum TerrainDebugView {
     Direct = 13,
     Ambient = 14,
     Specular = 15,
+    ResolvedMaterialLod = 16,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

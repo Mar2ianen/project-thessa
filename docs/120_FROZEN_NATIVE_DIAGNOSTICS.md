@@ -5,9 +5,9 @@ process restoration, transport decomposition and reference parity remain open.
 
 ## Published-frame contract
 
-`thessa-terrain-native --terrain-diagnostic-sequence NEW_DIR` captures 17 terrain
+`thessa-terrain-native --terrain-diagnostic-sequence NEW_DIR` captures 18 terrain
 views after normal warmup/rendering. With the optional doc 123 ambient receiver,
-three beauty Off/On/Off controls precede these views (20 total); the actual HDR
+three beauty Off/On/Off controls precede these views (21 total); the actual HDR
 receiver must remain byte-identical across controls. It freezes the already-published CBT
 vertices, topology records/state, draw arguments, height/material residency,
 meshes, camera, ephemeris time, exposure, sky/ocean/light resources and shadow
@@ -68,3 +68,10 @@ Doc 121 subsequently implements independent water presence. Source-error
 bounds, bounce and complete receiver/component outputs remain separate tasks
 from doc 119; bounded current-frame sky visibility is subsequently implemented
 in doc 123.
+
+Doc 134 adds `resolved_material_lod` (code 16) beside the unchanged requested
+`material_lod` (code 11). This extends the current frozen sequence by one view;
+the historical 17/20-view captures above retain their original counts.
+The new view reports albedo/roughness material-page ancestry and resident page
+coverage, not normal-directory residency, within-page mip level or final
+water/globe contribution. See [doc 134](134_RESOLVED_MATERIAL_PAGE_LOD.md).

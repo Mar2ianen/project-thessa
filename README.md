@@ -1045,3 +1045,9 @@ GGX substrate budget in raster and RT shading. Physical-GPU regressions and all
 nine fern controls pass; foreground soil, directional leaf scattering and scene
 parity remain open. Additional material integration cost is explicit; release
 performance is not yet accepted.
+
+[Resolved material-page LOD](docs/134_RESOLVED_MATERIAL_PAGE_LOD.md) distinguishes
+requested detail from resident ancestors. The inspected 0.3 m frame retains fine
+material pages across almost all covered foreground, yet albedo remains smeared;
+source bandwidth and within-page filtering are the next investigation. This is
+diagnostic evidence, not repaired soil or reference acceptance.

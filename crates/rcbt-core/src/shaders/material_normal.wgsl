@@ -20,6 +20,7 @@ struct RasterMaterialSample {
     base_normal: vec2<f32>,
     height_coverage: f32,
     coverage: f32,
+    resolved_lod: f32,
 };
 
 fn material_normal_layer(id: vec2<u32>) -> vec2<u32> {
@@ -41,7 +42,7 @@ fn material_at_level_raster_with_height_field(address:MaterialAddress,dx:vec2<f3
     var level = requested;
     var extent = exp2(f32(level));
     var id = material_node(address.face, vec2<u32>(material_coordinates(address, extent).tile), level);
-    var result = RasterMaterialSample(vec4(0.0), 0.0, vec2(0.0), vec2(0.0), 0.0, 0.0);
+    var result = RasterMaterialSample(vec4(0.0), 0.0, vec2(0.0), vec2(0.0), 0.0, 0.0, 0.0);
     var remaining = 1.0;
     loop {
         let layer = material_layer(id);
@@ -76,6 +77,7 @@ fn material_at_level_raster_with_height_field(address:MaterialAddress,dx:vec2<f3
             }
             result.water_coverage += material_water_coverage(uv, i32(layer), dx * footprint, dy * footprint) * weight;
             result.coverage += weight;
+            result.resolved_lod += f32(level) * weight;
             remaining -= weight;
             if (remaining <= 0.00001) { break; }
         }

@@ -1037,3 +1037,11 @@ physical-GPU raster (9), ray (32), renderer unit (43), 27 energy probes and
 reflections-off/on ambient-visibility checks passed. Native tests, strict Clippy
 and architecture passed. Low/disabled fallbacks remain explicit. Release timing,
 directional leaf scattering and forest/reference acceptance remain open.
+
+[Resolved material-page LOD](134_RESOLVED_MATERIAL_PAGE_LOD.md) adds selector 16
+without changing requested selector 11. Eight physical-GPU material regressions
+and all 21 frozen native views pass; every image was visually inspected. Only
+0.1846% of covered bottom-third pixels have a page-level gap above 0.5, so missing
+fine material ancestors do not explain the dominant albedo smear in this frame.
+Source/page sampling bandwidth and hardware mip behavior remain open. This does
+not measure separate normal-page residency or establish improved soil appearance.

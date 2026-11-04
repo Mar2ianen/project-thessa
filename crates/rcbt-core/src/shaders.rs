@@ -657,6 +657,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let coarse = material_at_level_raster_with_height_field(address,address_dx,address_dy,u32(floor(material_lod)),GROUND_RELIEF_GEOMETRY);
     let fine = material_at_level_raster_with_height_field(address,address_dx,address_dy,u32(ceil(material_lod)),GROUND_RELIEF_GEOMETRY);
     let coverage = mix(coarse.coverage, fine.coverage, fract(material_lod));
+    let resolved_material_lod = mix(coarse.resolved_lod, fine.resolved_lod, fract(material_lod));
     let detail = mix(coarse.value, fine.value, fract(material_lod)) / max(coverage, 0.00001);
     detail_weight *= coverage;
     var albedo = vec3(0.0);
@@ -694,6 +695,10 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     if (cbt_terrain_debug_view() == 9u) { return vec4(vec3(f32(input.terrain_debug_data.y)/24.0),1.0); }
     if (cbt_terrain_debug_view() == 10u) { return vec4(vec3(clamp(footprint_m, 0.0, 10.0) / 10.0), 1.0); }
     if (cbt_terrain_debug_view() == 11u) { return vec4(vec3(material_lod / MATERIAL_MAX_LEVEL), 1.0); }
+    if (cbt_terrain_debug_view() == 16u) {
+        if (coverage <= 0.00001) { return vec4(1.0, 0.0, 1.0, 1.0); }
+        return vec4(resolved_material_lod / (coverage * MATERIAL_MAX_LEVEL), clamp(coverage, 0.0, 1.0), 0.0, 1.0);
+    }
     if (cbt_terrain_debug_view() == 12u) {
         let weight = (1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m)) * (1.0 - water_material);
         let height_coverage = mix(coarse.height_coverage, fine.height_coverage, fract(material_lod)) * weight;

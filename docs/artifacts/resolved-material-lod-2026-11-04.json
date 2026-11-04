@@ -1,0 +1,212 @@
+{
+  "baseline": "443c4f4",
+  "date": "2026-11-04",
+  "hardware": "AMD Radeon880M/RADVSTRIX1; isolated renderD128; serial GPU jobs",
+  "reference": {
+    "project": "OpenEngine",
+    "revision": "bdf5c2710fe37c1c5ddbac7787477daa87524af3",
+    "path": "Engine/Modules/CBTTerrain/Shaders/CBT/cbt_page.glsl",
+    "lines": [
+      "68-78",
+      "246-277",
+      "471-519"
+    ]
+  },
+  "capture_provenance": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/provenance.json",
+    "sha256": "2887640d763f6fe7f110e5beb0026a767a6a039ccfee06e060a9e5f0e10d3bfe"
+  },
+  "frozen_manifest": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/manifest.json",
+    "sha256": "e5d364694edbb57b2d45d05155f90f8bb464fb69c92a2aa88a8071bc17c89089"
+  },
+  "images": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/full-fhd.png",
+      "sha256": "a6d940d0074e3d81592f386be874495ec46c593939ec2e736c62cc8538ca7b5f"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/review-all.jpg",
+      "sha256": "f9352c46ce629752177f0d1e9ab2ae3102c5ddc9e7b56de15fc79b1a22fea3d6"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/00-none.png",
+      "sha256": "fbb8955cdca7b8e5d286594671947abd60d8b981fc70457c9a9ceef522277163"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/01-none.png",
+      "sha256": "a6d940d0074e3d81592f386be874495ec46c593939ec2e736c62cc8538ca7b5f"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/02-none.png",
+      "sha256": "fbb8955cdca7b8e5d286594671947abd60d8b981fc70457c9a9ceef522277163"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/03-none.png",
+      "sha256": "a6d940d0074e3d81592f386be874495ec46c593939ec2e736c62cc8538ca7b5f"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/04-water_weight.png",
+      "sha256": "94d0bf163555448beec714fa93731687705a755b44c785abb8d7afa64057af8e"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/05-height.png",
+      "sha256": "44042a6dea116703bfb0cff72c56219183eb485674582213eee24a51d009e818"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/06-distance.png",
+      "sha256": "f8429be90427869b650bb79bb0f7ccaed7d7425ddd929778d13fde9177ae7872"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/07-normal.png",
+      "sha256": "5c97e7bd439033d43ecd4090dd7f15475cdf9cb51afc24db4ca33cc9d6b53ea4"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/08-albedo.png",
+      "sha256": "c8ec4845775e007fcad75e22c23e30572f23350b427df2ca38a696ef4d767674"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/09-roughness.png",
+      "sha256": "6d6e70d8dfbffe464bea6dd1190c1df8747fa9100a7d7db39fe30ba4b27985b2"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/10-geometry.png",
+      "sha256": "8eb28973e10f0909c625da8a191a12b9b780685194814bf484ae94dff1524715"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/11-height_page_level.png",
+      "sha256": "41c110c4ab212f1ce1d3769f9697e0f98a46f5b2a27af160f7c0aae59ae1c89b"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/12-footprint.png",
+      "sha256": "8329095ee07c471dae3bd35c0f17551fa4adf0784349de66fc92cd19d5dfb6d5"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/13-material_lod.png",
+      "sha256": "db7f2048c1f15cc7423e2aeb6f7f9be6fde274698542e3d1ab019e7dffa021d2"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/14-resolved_material_lod.png",
+      "sha256": "1a04c80877dfc497b796e32192cb55326dff0783bc393721878499e5f134d27f"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/15-relief_weight.png",
+      "sha256": "f8498863428f2e3153b4f9f7a7eba97764e3b70e1e4e4aa7b6a2395954793041"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/16-direct.png",
+      "sha256": "ab6d231a96b85080d3b837507f0fdec38d2df09896fbd8df0b739352875ff2c8"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/17-ambient.png",
+      "sha256": "d1c68d1c47d46fc10fce42bfc569b35fe36ca7a48192eb472c94e324c1e4f9f5"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/18-specular.png",
+      "sha256": "e67a210df8d7f8355ea0e445725484445f3d9edf5430ec5a52aad25020f23572"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/19-land_only.png",
+      "sha256": "a21929e4e711dbf8c489f32063fc46c70d04838d4d54da5d9700973eeaaa602d"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-lod-v1-soil-030m/views/20-none.png",
+      "sha256": "a6d940d0074e3d81592f386be874495ec46c593939ec2e736c62cc8538ca7b5f"
+    }
+  ],
+  "raw_analysis": {
+    "roi": "rows721..1079, full width; resolved page coverage>.99 and diagnostic B=0, excluding beauty meshes",
+    "terrain_pixels": 656599,
+    "requested_lod_percentiles": [
+      23.49609375,
+      24.0,
+      24.0,
+      24.0,
+      24.0
+    ],
+    "resolved_lod_percentiles": [
+      21.99609375,
+      23.98828125,
+      23.98828125,
+      23.98828125,
+      23.98828125
+    ],
+    "request_minus_resolved_percentiles": [
+      0.0,
+      0.01171875,
+      0.01171875,
+      0.01171875,
+      1.921875
+    ],
+    "gap_gt_0_5_fraction": 0.0018458754886924895,
+    "gap_gt_1_fraction": 0.0012549516523783922,
+    "footprint_m_percentiles": [
+      0.0006097555160522461,
+      0.0007337331771850586,
+      0.0015997886657714844,
+      0.00762939453125,
+      0.06885528564453125
+    ],
+    "height_coverage_percentiles": [
+      0.99951171875,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "review": {
+    "author": "root",
+    "complete_variant_sheet": true,
+    "native_resolution_opened": [
+      "views/08-albedo.png",
+      "views/07-normal.png"
+    ],
+    "findings": [
+      "Both albedo and shaded normal remain visibly smeared in the foreground.",
+      "99.8154% of covered bottom-third material pixels have requested/resolved page-level gap<=0.5; ancestor fallback is not the dominant albedo blur cause in this frame.",
+      "Diagnostic does not measure normal-page directory or hardware mip level.",
+      "Height coverage is essentially complete in the measured ROI."
+    ],
+    "blind": false,
+    "performance_equivalent": false
+  },
+  "checks": {
+    "material_gpu": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/resolved-material-lod-regressions.log",
+      "sha256": "50d82abede47f9918dae696d3074e9087a34f2cc13af11d1e00c714c5463b4ac"
+    },
+    "graphics_cpu": {
+      "path": "/tmp/thessa-resolved-lod-graphics.log",
+      "sha256": "6d8b6fb6e5a85638178d8b1504081040a3a1c4b0a5d2564a2a77f01ef30cffaf"
+    },
+    "core_cpu": {
+      "path": "/tmp/thessa-resolved-lod-core.log",
+      "sha256": "7f663df6b37e07b268be90f838ad72ce28aac73e91f27bd84af2cfa231943846"
+    },
+    "native_cpu": {
+      "path": "/tmp/thessa-resolved-lod-native-tests.log",
+      "sha256": "5405a7307ae826a0632a33f7c4c1a38f741d1099ddcde0b62f3f6ef19486ed21"
+    },
+    "clippy": {
+      "path": "/tmp/thessa-resolved-lod-clippy-final.log",
+      "sha256": "36c3395f7804a7d96def039fc4bc5b5ed64c6c3fb9ef18a072e811d4314ea81c"
+    },
+    "architecture": {
+      "path": "/tmp/thessa-resolved-lod-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    }
+  },
+  "results": {
+    "material_gpu_passed": 8,
+    "graphics_cpu_passed": 55,
+    "core_cpu_passed": 89,
+    "core_ignored": 1,
+    "native_primary_passed": 153,
+    "native_primary_ignored": 51,
+    "clippy": "passed",
+    "architecture": "passed",
+    "frozen_views": 21,
+    "depth_and_beauty_roundtrip_and_geometry_identical": true
+  }
+}

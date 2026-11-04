@@ -126,6 +126,7 @@ impl Capture<'_> {
             V::HeightPageLevel,
             V::Footprint,
             V::MaterialLod,
+            V::ResolvedMaterialLod,
             V::ReliefWeight,
             V::Direct,
             V::Ambient,

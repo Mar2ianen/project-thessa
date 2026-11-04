@@ -1039,3 +1039,171 @@ fn partial_height_field_coverage_does_not_amplify_optical_slope() {
         "fixture must exercise partial canonical coverage, got {partial_samples}"
     );
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
+fn resolved_material_lod_reports_parent_fallback_and_missing_pages() {
+    let backend = Backend::bring_up().expect("requires the local hardware adapter");
+    let geometry = TileKey::new(4, 22, 2_000_000, 2_000_000).unwrap();
+    let fine = TileKey::new(4, 24, geometry.x * 4 + 3, geometry.y * 4 + 3).unwrap();
+    let parent = TileKey::new(fine.face, fine.level - 1, fine.x >> 1, fine.y >> 1).unwrap();
+    let fine_anchor = TileAnchor::new(fine, 3_200_000.0).unwrap();
+    let geometry_anchor = TileAnchor::new(geometry, 3_200_000.0).unwrap();
+    let center = DVec3::from(fine_anchor.project_body_m([0.5, 0.5], 0.0));
+    let eye = center + DVec3::from(fine_anchor.normal) * 2.0;
+    let view = ViewParams {
+        world_from_view: glam::dcamera::rh::view::look_at_mat4(
+            eye,
+            center,
+            DVec3::from(fine_anchor.raw_axis_v),
+        )
+        .inverse(),
+        clip_from_view: glam::dcamera::rh::proj::directx::perspective(0.000625, 1.0, 0.01, 1000.0),
+        world_position_m: eye,
+        exposure: 1.0,
+    };
+    let height = HeightPage::bake(&[0.0; 4], 2, 0.01).unwrap();
+    let settings = thessa_graphics::ResolvedGraphicsSettings {
+        surface_quality: thessa_graphics::Quality::High,
+        terrain_debug_view: thessa_graphics::TerrainDebugView::ResolvedMaterialLod,
+        terrain_material_anisotropy: 1,
+        terrain_normal_maps: false,
+        terrain_ground_detail: true,
+        specular_reflections: false,
+        shadow_enabled: false,
+        ..Default::default()
+    };
+    let mut renderer = TerrainRenderer::with_capacity_and_lighting(
+        &backend,
+        &[TerrainPatch {
+            anchor: geometry_anchor,
+            page: &height,
+        }],
+        OffscreenTarget::FORMAT,
+        thessa_render_wgpu::terrain::TerrainCapacity {
+            patches: 1,
+            material_layers: 2,
+            height_grid_size: 2,
+        },
+        Some(&settings),
+    )
+    .unwrap();
+    renderer
+        .update_lighting(
+            &backend,
+            &SurfaceLighting {
+                ambient_lux: [std::f32::consts::PI; 4],
+                directions: [[0.0; 4]; 3],
+                colors_lux: [[0.0; 4]; 3],
+            },
+        )
+        .unwrap();
+    renderer.update_view(&backend, &view).unwrap();
+    let target = OffscreenTarget::new(&backend, 65, 65).unwrap();
+    let capture =
+        |renderer: &TerrainRenderer, mode: thessa_graphics::TerrainDebugView| -> [u8; 4] {
+            let mut selection = settings.clone();
+            selection.terrain_debug_view = mode;
+            renderer
+                .set_terrain_debug_view(&backend, &selection)
+                .unwrap();
+            let mut encoder = backend.device.create_command_encoder(&Default::default());
+            renderer.encode(&mut encoder, &target.color, &target.depth);
+            backend.queue.submit([encoder.finish()]);
+            target.read_rgba8(&backend).unwrap()[(32 * 65 + 32) * 4..][..4]
+                .try_into()
+                .unwrap()
+        };
+    let linear = |value: u8| {
+        let s = f32::from(value) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let requested = |renderer: &TerrainRenderer| {
+        let pixel = capture(renderer, thessa_graphics::TerrainDebugView::MaterialLod);
+        linear(pixel[0]) * settings.terrain_material_max_level() as f32
+    };
+    let resolved = |renderer: &TerrainRenderer| {
+        capture(
+            renderer,
+            thessa_graphics::TerrainDebugView::ResolvedMaterialLod,
+        )
+    };
+    // The height-page helper stops at L22; append this material descendant's
+    // nonzero quadrant path explicitly, as the page address contract requires.
+    let geometry_id = thessa_rcbt_core::conforming_surface::page_id(geometry).unwrap();
+    let parent_id = (geometry_id << 2) | 3;
+    let fine_id = (parent_id << 2) | 3;
+    let material = CbtMaterialPage::from_rgba8([128, 128, 128, 255].repeat(128 * 128)).unwrap();
+
+    // A fully available parent provides data, but cannot claim the child's LOD.
+    let parent_only = [(parent_id, (1, material.clone()))].into_iter().collect();
+    renderer
+        .update_materials(&backend, &[fine_id], &parent_only)
+        .unwrap();
+    let requested_lod = requested(&renderer);
+    let parent_result = resolved(&renderer);
+    assert!(
+        requested_lod > parent.level as f32 + 0.5,
+        "requested LOD={requested_lod}"
+    );
+    assert!(
+        (linear(parent_result[0]) * settings.terrain_material_max_level() as f32
+            - parent.level as f32)
+            .abs()
+            < 0.1,
+        "parent fallback should report L{}: {parent_result:?}",
+        parent.level
+    );
+    assert!(
+        parent_result[1] > 250,
+        "parent fully covers the pixel: {parent_result:?}"
+    );
+    assert_eq!(parent_result[2], 0);
+
+    // Once the child is resident, its true blend with the parent matches request.
+    let parent_and_fine = [
+        (parent_id, (1, material.clone())),
+        (fine_id, (1, material.clone())),
+    ]
+    .into_iter()
+    .collect();
+    renderer
+        .update_materials(&backend, &[fine_id], &parent_and_fine)
+        .unwrap();
+    let requested_lod = requested(&renderer);
+    let fine_result = resolved(&renderer);
+    let fine_lod = linear(fine_result[0]) * settings.terrain_material_max_level() as f32;
+    assert!(
+        (fine_lod - requested_lod).abs() < 0.15,
+        "requested={requested_lod} resolved={fine_lod}"
+    );
+    assert!(
+        fine_result[1] > 250,
+        "resident pages cover the pixel: {fine_result:?}"
+    );
+
+    // A footprint between page levels exercises the true coarse/fine weights,
+    // rather than testing only the maximum-LOD clamp.
+    let mut fractional_view = view;
+    fractional_view.clip_from_view =
+        glam::dcamera::rh::proj::directx::perspective(0.14, 1.0, 0.01, 1000.0);
+    renderer.update_view(&backend, &fractional_view).unwrap();
+    let fractional_request = requested(&renderer);
+    let fractional_result = resolved(&renderer);
+    let fractional_lod =
+        linear(fractional_result[0]) * settings.terrain_material_max_level() as f32;
+    eprintln!("fractional requested={fractional_request} resolved={fractional_lod}");
+    assert!(fractional_request > 23.1 && fractional_request < 23.9);
+    assert!((fractional_lod - fractional_request).abs() < 0.15);
+
+    // No resident source has a distinct magenta sentinel rather than a false L0.
+    let empty = thessa_rcbt_core::material_page::MaterialPages::new();
+    renderer
+        .update_materials(&backend, &[fine_id], &empty)
+        .unwrap();
+    assert_eq!(resolved(&renderer), [255, 0, 255, 255]);
+}

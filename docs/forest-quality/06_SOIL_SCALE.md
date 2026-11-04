@@ -22,3 +22,11 @@ The executed 0.3 m view still shows blurred foreground soil and intersecting clo
 fronds. Its log reports material pages through level 24 and four pending material
 jobs at capture. Presence of level-24 pages does not prove local footprint coverage;
 inspect the actual receiver debug values rather than raising a global LOD limit.
+
+The subsequent [resolved-page audit](../134_RESOLVED_MATERIAL_PAGE_LOD.md)
+inspects all 21 native views at 0.3 m. It rejects missing fine albedo/roughness
+ancestors as the dominant blur explanation in this frame: only 0.1846% of covered
+bottom-third pixels have a requested/resolved gap above 0.5. Albedo and normal
+still look smeared; the approximately 3 mm source/page spacing is coarser than
+many foreground pixels. Source bandwidth, within-page mip filtering and separate
+normal residency remain separate tests, not an accepted quality repair.

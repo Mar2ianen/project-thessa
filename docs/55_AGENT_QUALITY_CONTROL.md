@@ -20,6 +20,10 @@ in [doc 89](89_REFERENCE_CAPTURE.md).
 5. **Report evidence.** Give exact command(s), output or artifact location,
    baseline commit, scenario, GPU/driver when relevant, and known omissions.
    Never label an unexecuted check as passed.
+   Every emitted visual artifact must be inspected: review the full variant set
+   and diagnostic buffers, open visible defects at native resolution, and record
+   silhouette/material/contact/scene findings. Contact sheets help cover the set;
+   numerical success and selected favorable beauty frames do not close visual quality.
 6. **Integrate.** Keep a buildable tree; update status docs in the same change.
    A code-producing agent cannot self-certify its own visual comparison.
 

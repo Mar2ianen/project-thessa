@@ -316,6 +316,10 @@ A feature is not done without:
 - Record which checks actually ran, the reproducible scenario and baseline,
   hardware/backend when relevant, known gaps, and what was deliberately omitted.
   Never claim green CI, visual parity, or a benchmark win without its evidence.
+- Inspect every emitted render artifact visually before accepting an iteration.
+  Review complete variant/contact sheets and open defects at native resolution;
+  record silhouette, material, ground contact, and scene integration separately.
+  Passing numerical tests or a selected favorable image cannot replace this review.
 - For visual changes, distinguish deterministic scene/oracle tests from
   **blind subjective preference**. Keep origin labels hidden from the reviewer,
   keep answer keys separate, permit ties and invalid comparisons, and evaluate

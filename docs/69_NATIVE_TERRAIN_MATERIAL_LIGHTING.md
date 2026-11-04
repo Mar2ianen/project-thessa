@@ -888,3 +888,12 @@ large-f32-index carry and cross-face neighbor precision failures, without changi
 geometry or GPU page budgets. Strict source-mean tests retain their tolerances;
 updated source statistics and the extra 224 MiB CPU mip/residual cache are explicit.
 The inspected close frames recover finer variation but retain the broad soil smear.
+
+### Opaque terrain direct-sun hemisphere (2026-11-04)
+
+[Doc 136](136_OPAQUE_TERRAIN_SUN_HEMISPHERE.md) aligns primary terrain with
+the existing mesh/secondary-RT geometric-side contract: mapped normals cannot
+receive direct land diffuse or GGX sunlight through an opaque triangle. The
+existing derivative receiver normal owns that test; sky and liquid endpoints
+retain their prior response. No new pass, ray query, quality setting or topology
+is introduced. Coarse faceted terminators and soil appearance remain open.

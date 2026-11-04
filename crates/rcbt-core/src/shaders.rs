@@ -724,6 +724,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     if (cbt_terrain_debug_view() == 4u) { return vec4(shaded_normal * 0.5 + 0.5, 1.0); }
     var direct = vec3(0.0);
+    var water_direct = vec3(0.0);
     var visibility: array<f32,3>;
     var sunlight: array<vec3<f32>,3>;
     let radial_up=normalize(mat3x3<f32>(render_from_body[0].xyz,render_from_body[1].xyz,render_from_body[2].xyz)*direction);
@@ -732,8 +733,11 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         sunlight[i]=cbt_sunlight(input.render_position,radial_up,lighting.directions[i].xyz,lighting.colors_lux[i].rgb);
         if (any(sunlight[i] > vec3(0.0))) {
             visibility[i] = cbt_shadow_visibility(input.render_position, receiver_normal, i);
-            let incoming = sunlight[i] * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
+            let incident = sunlight[i] * max(dot(shaded_normal, lighting.directions[i].xyz), 0.0)
                 * visibility[i];
+            water_direct += incident;
+            // A material normal cannot transmit sunlight through opaque geometry.
+            let incoming = select(vec3(0.0), incident, dot(receiver_normal,lighting.directions[i].xyz)>0.0);
             direct += incoming;
             if (cbt_specular_enabled() && water_material < 1.0 && any(incoming > vec3(0.0))) {
                 land_direct += incoming * cbt_land_transmission(shaded_normal,lighting.directions[i].xyz,roughness);
@@ -758,21 +762,21 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let surface_ambient=cbt_diffuse_environment(shaded_normal,lighting.ambient_lux.rgb);
     // Sky visibility/bounce must have their own transport, independent of stellar slot order.
-    if (cbt_terrain_debug_view() == 13u) { return vec4(direct * shadow * view.exposure / OCEAN_PI, 1.0); }
+    if (cbt_terrain_debug_view() == 13u) { return vec4(mix(direct,water_direct,water_material) * shadow * view.exposure / OCEAN_PI, 1.0); }
     if (cbt_terrain_debug_view() == 14u) { return vec4(surface_ambient * view.exposure / OCEAN_PI, 1.0); }
-    var illuminance = surface_ambient + direct * shadow;
-    let diffuse = albedo * illuminance / OCEAN_PI;
+    let opaque_diffuse = albedo * (surface_ambient + direct * shadow) / OCEAN_PI;
+    let diffuse = albedo * (surface_ambient + water_direct * shadow) / OCEAN_PI;
     var ambient_component = albedo * surface_ambient / OCEAN_PI;
     let water = water_material * lighting.ocean_appearance.z;
     // Land roughness is a material property, not only an ocean classifier.
     // Reuse the existing dielectric GGX kernel and linear-lux convention;
     // this adds neither a lighting pipeline nor a hidden geometry prepass.
     let eye = ocean_safe_normalize(view.world_position - input.render_position, normal);
-    var radiance = diffuse;
+    var radiance = mix(opaque_diffuse,diffuse,water_material);
     if (cbt_specular_enabled() && water_material < 1.0) {
         var land_reflection = vec3(0.0);
         for (var i = 0u; i < 3u; i = i + 1u) {
-            if (any(sunlight[i] > vec3(0.0))) {
+            if (any(sunlight[i] > vec3(0.0)) && dot(receiver_normal,lighting.directions[i].xyz)>0.0) {
                 land_reflection += ocean_sun_reflection(shaded_normal, eye, lighting.directions[i].xyz,
                     sunlight[i], roughness, 0.04)
                     * visibility[i];

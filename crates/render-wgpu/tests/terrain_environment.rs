@@ -958,3 +958,213 @@ fn diagnostic_sequence_preserves_published_geometry_depth_and_round_trip() {
     assert_eq!(terrain.read_topology_records(&backend).unwrap(), topology);
     assert_eq!(terrain.temporal_epoch(), epoch);
 }
+
+#[test]
+#[ignore = "GPU: opaque ground rejects direct sunlight across its geometric hemisphere"]
+fn mapped_ground_cannot_reflect_sunlight_through_its_geometric_backside() {
+    let backend = Backend::bring_up().unwrap();
+    let save = |label: &str, pixels: &[u8]| {
+        if let Some(dir) = std::env::var_os("THESSA_TEST_ARTIFACT_DIR") {
+            let file =
+                std::fs::File::create(std::path::PathBuf::from(dir).join(format!("{label}.png")))
+                    .unwrap();
+            let mut encoder = png::Encoder::new(file, 65, 65);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(pixels)
+                .unwrap();
+        }
+    };
+    let mut failures = Vec::new();
+    for tilted in [false, true] {
+        // Shared root corners remain continuous across faces. The +Z receiver
+        // slopes away from +X, so the tilted case rejects an above-horizon sun.
+        let heights: Vec<_> = (0..6)
+            .map(|face| {
+                let anchor = TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), 1000.0).unwrap();
+                let samples: Vec<_> = (0..4)
+                    .map(|i| {
+                        let p = anchor.project_body_m([(i % 2) as f64, (i / 2) as f64], 0.0);
+                        10.0 + if tilted { 500.0 * p[0] / 1000.0 } else { 0.0 }
+                    })
+                    .collect();
+                HeightPage::bake(&samples, 2, 0.001).unwrap()
+            })
+            .collect();
+        for conforming in [false, true] {
+            for quality in [Quality::Low, Quality::Medium, Quality::High] {
+                for (reflections, albedo) in [(false, 180), (true, 180), (true, 0)] {
+                    let mut settings = ResolvedGraphicsSettings {
+                        surface_quality: quality,
+                        specular_reflections: reflections,
+                        terrain_normal_maps: true,
+                        shadow_enabled: false,
+                        atmosphere_enabled: false,
+                        clouds_enabled: false,
+                        night_lights_enabled: false,
+                        ..Default::default()
+                    };
+                    settings.ocean.enabled = false;
+                    if conforming {
+                        settings.terrain_topology = ResolvedTerrainTopology {
+                            capacity: 4096,
+                            waves: 2,
+                            split_area_px: 64.0,
+                            merge_area_px: 8.0,
+                        };
+                    }
+                    let patches: Vec<_> = (0..6)
+                        .map(|face| TerrainPatch {
+                            anchor: TileAnchor::new(TileKey::new(face, 0, 0, 0).unwrap(), 1000.0)
+                                .unwrap(),
+                            page: &heights[face as usize],
+                        })
+                        .collect();
+                    let mut terrain = TerrainRenderer::with_capacity_and_lighting(
+                        &backend,
+                        &patches,
+                        wgpu::TextureFormat::Rgba8Unorm,
+                        TerrainCapacity {
+                            patches: 6,
+                            height_grid_size: 2,
+                            material_layers: 6,
+                        },
+                        Some(&settings),
+                    )
+                    .unwrap();
+                    let page = CbtMaterialPage::from_rgba8_with_normals(
+                        [albedo, albedo, albedo, 128].repeat(128 * 128),
+                        Some([102, 0].repeat(128 * 128)),
+                    )
+                    .unwrap();
+                    let publish = |terrain: &mut TerrainRenderer, water: u8| {
+                        let source = page
+                            .clone()
+                            .with_water_coverage(vec![water; 128 * 128])
+                            .unwrap();
+                        let pages = MaterialPages::from_iter(
+                            (8..14).map(|id| (id, (u64::from(water) + 1, source.clone()))),
+                        );
+                        terrain
+                            .update_materials(&backend, &(8..14).collect::<Vec<_>>(), &pages)
+                            .unwrap();
+                    };
+                    publish(&mut terrain, 0);
+                    let render =
+                        |terrain: &mut TerrainRenderer, sun_z: Option<f32>, ambient: f32| {
+                            let direction = sun_z
+                                .map(|z| [(1.0 - z * z).sqrt(), 0.0, z, 0.0])
+                                .unwrap_or([0.0; 4]);
+                            terrain
+                                .update_lighting(
+                                    &backend,
+                                    &SurfaceLighting {
+                                        directions: [direction, [0.0; 4], [0.0; 4]],
+                                        colors_lux: [
+                                            if sun_z.is_some() {
+                                                [30.0, 30.0, 30.0, 0.0]
+                                            } else {
+                                                [0.0; 4]
+                                            },
+                                            [0.0; 4],
+                                            [0.0; 4],
+                                        ],
+                                        ambient_lux: [ambient, ambient, ambient, 0.0],
+                                    },
+                                )
+                                .unwrap();
+                            draw(&backend, terrain, [65, 65])
+                        };
+                    for _ in 0..3 {
+                        let _ = render(&mut terrain, None, 0.0);
+                    }
+                    let back_z = if tilted { 0.1 } else { -0.1 };
+                    for ambient in [0.0, std::f32::consts::PI] {
+                        let sky = render(&mut terrain, None, ambient);
+                        let back = render(&mut terrain, Some(back_z), ambient);
+                        let expected = center(&sky);
+                        let actual = center(&back);
+                        eprintln!(
+                            "ground hemisphere tilted={tilted} conforming={conforming} quality={quality:?} specular={reflections} albedo={albedo} ambient={ambient} sky={expected:?} backside={actual:?}"
+                        );
+                        if actual != expected {
+                            failures.push(format!("tilted={tilted} conforming={conforming} quality={quality:?} specular={reflections} albedo={albedo}: {actual:?} != {expected:?}"));
+                        }
+                        if !conforming && quality == Quality::High && !reflections && ambient > 0.0
+                        {
+                            save(&format!("ground-tilted{tilted}-sky"), &sky);
+                            save(&format!("ground-tilted{tilted}-back_sun"), &back);
+                        }
+                    }
+                    let sky = center(&render(&mut terrain, None, std::f32::consts::PI));
+                    let front = center(&render(
+                        &mut terrain,
+                        Some(if tilted { 0.5 } else { 0.1 }),
+                        std::f32::consts::PI,
+                    ));
+                    assert!(
+                        front.iter().zip(sky).any(|(a, b)| *a > b + 2),
+                        "front-side light must remain active: {front:?} vs {sky:?}"
+                    );
+                    // The source normal also changes with liquid coverage;
+                    // do not assume that an intermediate material is a linear
+                    // interpolation of two differently oriented endpoints.
+                    if albedo != 0 {
+                        for water in [128, 255] {
+                            publish(&mut terrain, water);
+                            if !tilted
+                                && !conforming
+                                && !reflections
+                                && quality == Quality::Low
+                                && water == 128
+                            {
+                                let actual = center(&render(&mut terrain, Some(back_z), 0.0));
+                                let w = 128.0_f64 / 255.0;
+                                let nx = 102.0_f64 / 127.0;
+                                let slope = nx / (1.0 - nx * nx).sqrt() * (1.0 - w);
+                                let cosine =
+                                    (slope * 0.99_f64.sqrt() - 0.1) / (1.0 + slope * slope).sqrt();
+                                let albedo = ((180.0_f64 / 255.0 + 0.055) / 1.055).powf(2.4);
+                                let expected = (w * albedo * cosine * 30.0 / std::f64::consts::PI
+                                    * 0.1
+                                    * 255.0)
+                                    .round() as u8;
+                                if actual.iter().any(|v| v.abs_diff(expected) > 1) {
+                                    failures.push(format!("partial liquid must not illuminate the opaque fraction: {actual:?} vs {expected}"));
+                                }
+                            }
+                            let frame = render(
+                                &mut terrain,
+                                Some(if tilted { 0.5 } else { 0.1 }),
+                                std::f32::consts::PI,
+                            );
+                            let pixel = center(&frame);
+                            assert!(
+                                pixel.iter().any(|c| *c > 2),
+                                "declared liquid control must remain lit"
+                            );
+                            eprintln!(
+                                "water control tilted={tilted} conforming={conforming} quality={quality:?} specular={reflections} water={water} pixel={pixel:?}"
+                            );
+                            if water == 255 {
+                                save(
+                                    &format!(
+                                        "water-tilted{tilted}-conforming{conforming}-quality{quality:?}-specular{reflections}"
+                                    ),
+                                    &frame,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "opaque terrain sunlight leaks: {failures:?}"
+    );
+}

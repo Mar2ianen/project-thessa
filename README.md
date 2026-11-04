@@ -1058,3 +1058,8 @@ page carries and cross-face neighbor lookup. Low/Medium, height geometry and
 GPU page budgets retain their limits. Source caches add 224 MiB of CPU memory;
 actual FHD views show incremental finer grain while broad soil smear and scene
 reference acceptance remain open.
+
+[Opaque terrain sun hemisphere](docs/136_OPAQUE_TERRAIN_SUN_HEMISPHERE.md)
+closes direct diffuse/GGX leakage through the back side of mapped terrain
+triangles, preserving sky and liquid response. Physical-GPU controls and native
+visual review pass; broad soil blur and full-scene parity remain open.

@@ -87,3 +87,8 @@ Real shared shadows and grazing cameras exposed the inherited living rachis arch
 the offline resting-organ deformation removes that arch while preserving pinna
 folds. Complete variant/scene review and its remaining material/contact defects
 are recorded in the item-specific visual manifest. Item 2 remains open.
+
+[Direct-sun hemisphere correction](136_OPAQUE_TERRAIN_SUN_HEMISPHERE.md) closes the reproduced
+opaque-ground backside diffuse/GGX leak. Sky and water controls are preserved;
+complete native visual review found no obvious new regression. This is a light
+contract repair, not closure of item 6 soil blur or reference acceptance.

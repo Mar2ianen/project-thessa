@@ -1054,3 +1054,8 @@ L17, L22 height geometry and page/cache budgets retain their limits. CPU source
 caches add 224 MiB and packed sources 54,062,744 bytes. Source-only L24 and L25
 native captures were reviewed completely: L25 recovers finer grain but the main
 smeared/striated soil appearance and scene/reference acceptance remain open.
+
+[Opaque terrain sun hemisphere](136_OPAQUE_TERRAIN_SUN_HEMISPHERE.md)
+closes direct diffuse/GGX leakage through the back side of mapped terrain
+triangles, preserving sky and liquid response. Physical-GPU controls and native
+visual review pass; broad soil blur and full-scene parity remain open.

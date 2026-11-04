@@ -1,0 +1,675 @@
+{
+  "date": "2026-11-04",
+  "baseline": "a123410079ae2f09bb6491ca4d16ef5693b9fc3e",
+  "status": "closed: opaque terrain direct-sun backside rejection; close-soil appearance and scene parity remain open",
+  "reference": {
+    "url": "https://github.com/mmp/pbrt-v3/blob/13d871faae88233b327d04cda24022b8bb0093ee/src/core/reflection.cpp#L613",
+    "application": "geometric reflection-side classification; existing Thessa mesh and secondary-RT contract reused; no copied code"
+  },
+  "implementation": {
+    "owner": "rcbt-core shared primary terrain fragment",
+    "changes": [
+      "Gate direct land Lambert and GGX with existing derivative receiver_normal",
+      "Keep liquid irradiance accumulator and coverage split",
+      "Match direct-light diagnostic to coverage split"
+    ],
+    "unchanged": [
+      "sky/environment",
+      "source atmospheric transport",
+      "water wave/spectral reflection inputs",
+      "shadow visibility",
+      "topology",
+      "settings and fallback ownership",
+      "passes, bindings and allocations",
+      "assets"
+    ],
+    "cost": "bounded ALU plus RGB accumulator; no measured release performance claim"
+  },
+  "source_pins": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/crates/rcbt-core/src/shaders.rs",
+      "sha256": "f52a885aea7a2cd755ddacf1740800176de7fa929bb439356f171e1e5caaf74a"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/crates/render-wgpu/tests/terrain_environment.rs",
+      "sha256": "c9dbcf49574b577835d9126f364a47651aab831749a919af080d28f0785917a0"
+    }
+  ],
+  "binary_pins": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/target/debug/deps/terrain_environment-468a58aed645cc86",
+      "sha256": "a224c554933ec56e6314fe1da72bcef9b2fa1222a9996fc6d02995f6703cfb68"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/work/render-contract-audit/target/debug/deps/ray_scene-ef81d8bff17ff788",
+      "sha256": "07601e8d9ae3927d1e6e6ab400d73f67d35e34a218ec64cd2d142ff7c3ade049"
+    }
+  ],
+  "red_provenance": {
+    "baseline": "a123410079ae2f09bb6491ca4d16ef5693b9fc3e",
+    "shader_sha256": "2d96033b0cf9260964367fc0075f2668aa6328089f78d6e909a4c5055e7c3bc9",
+    "test_sha256": "89c311d450d01cb9ce89c29a7e99b6228c204c1bc5ff0d2b285da4e734c632a4",
+    "binary_sha256": "869b87cc5664306f68da7ae32c9331e3d92e36e2e9e8e740a7abc1958ff4cf54",
+    "exit_code": 101
+  },
+  "proof": {
+    "minimal_old_rgb": [
+      82,
+      82,
+      82
+    ],
+    "expected_sky_rgb": [
+      0,
+      0,
+      0
+    ],
+    "original_backside_failures": 72,
+    "fixed_backside_exact_sky_matches": 72,
+    "front_light_positive_controls": 36,
+    "matrix": [
+      "flat/sloped",
+      "regular/persistent conforming",
+      "Low/Medium/High",
+      "Lambert/coupled GGX/black-albedo specular",
+      "sky off/on"
+    ],
+    "sloped_case": "source above planetary horizon, below actual receiver triangle plane",
+    "partial_liquid_lambert_oracle": "gradient scaled before normalization; opaque fraction rejects backlight; tolerance one RGB8 code",
+    "water_controls": {
+      "water_full_frame_controls": 24,
+      "water_full_frames_byte_identical": 24,
+      "water_mixed_and_full_center_controls": 48,
+      "water_centers_identical": 48,
+      "water_image_names": [
+        "water-tiltedfalse-conformingfalse-qualityHigh-specularfalse.png",
+        "water-tiltedfalse-conformingfalse-qualityHigh-speculartrue.png",
+        "water-tiltedfalse-conformingfalse-qualityLow-specularfalse.png",
+        "water-tiltedfalse-conformingfalse-qualityLow-speculartrue.png",
+        "water-tiltedfalse-conformingfalse-qualityMedium-specularfalse.png",
+        "water-tiltedfalse-conformingfalse-qualityMedium-speculartrue.png",
+        "water-tiltedfalse-conformingtrue-qualityHigh-specularfalse.png",
+        "water-tiltedfalse-conformingtrue-qualityHigh-speculartrue.png",
+        "water-tiltedfalse-conformingtrue-qualityLow-specularfalse.png",
+        "water-tiltedfalse-conformingtrue-qualityLow-speculartrue.png",
+        "water-tiltedfalse-conformingtrue-qualityMedium-specularfalse.png",
+        "water-tiltedfalse-conformingtrue-qualityMedium-speculartrue.png",
+        "water-tiltedtrue-conformingfalse-qualityHigh-specularfalse.png",
+        "water-tiltedtrue-conformingfalse-qualityHigh-speculartrue.png",
+        "water-tiltedtrue-conformingfalse-qualityLow-specularfalse.png",
+        "water-tiltedtrue-conformingfalse-qualityLow-speculartrue.png",
+        "water-tiltedtrue-conformingfalse-qualityMedium-specularfalse.png",
+        "water-tiltedtrue-conformingfalse-qualityMedium-speculartrue.png",
+        "water-tiltedtrue-conformingtrue-qualityHigh-specularfalse.png",
+        "water-tiltedtrue-conformingtrue-qualityHigh-speculartrue.png",
+        "water-tiltedtrue-conformingtrue-qualityLow-specularfalse.png",
+        "water-tiltedtrue-conformingtrue-qualityLow-speculartrue.png",
+        "water-tiltedtrue-conformingtrue-qualityMedium-specularfalse.png",
+        "water-tiltedtrue-conformingtrue-qualityMedium-speculartrue.png"
+      ]
+    }
+  },
+  "checks": {
+    "core": {
+      "passed": 89,
+      "ignored": 1
+    },
+    "terrain_environment": {
+      "passed": 16,
+      "excluded": "terrain_environment_gpu_cost"
+    },
+    "final_partial_water_oracle": {
+      "passed": 1,
+      "note": "targeted run after adding final analytic oracle; no shader change since full suite"
+    },
+    "ray_scene": {
+      "passed": 32,
+      "ignored": 4
+    },
+    "strict_clippy": "pass",
+    "native_build": "pass",
+    "architecture_gate": "pass: 44 packages, 20 guarded foundations"
+  },
+  "logs": [
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-red.log",
+      "sha256": "da89535a07a7e90f0d4cbe41b086b7fcdbaaf8f7aa7f04fc6a318c1e0b7e5139"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red.log",
+      "sha256": "0f64f28b4f0dadf12319d1e549015356ef4d0d631affb5276abefb10d492f69d"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2.log",
+      "sha256": "063cdd9046cc146fbf443e8e6d484681a7a52e22c69b4b3fcee7162d817a6bd9"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite.log",
+      "sha256": "5923181fc9fe063ebae40354a964aeaffb2bbd05c8c661bb480213e4e3351b99"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-partial-final.log",
+      "sha256": "c753e1fa5978f616a7648939f0e1a80e8941c0d911f1cfd723b5bbf4e8cadbc1"
+    },
+    {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-ray-compatibility.log",
+      "sha256": "f322cf819da48302327f77080ab2ea20c2ee64f37f99d37d1d4ce62cec65fabd"
+    },
+    {
+      "path": "/tmp/thessa-ground-hemisphere-core.log",
+      "sha256": "36ab1f019f2009a20cf98a04d13f90a78509663e1a3e01a49c61489a0a4cd73d"
+    },
+    {
+      "path": "/tmp/thessa-ground-hemisphere-clippy-final2.log",
+      "sha256": "a65d0baabf02f609c9f998246686b3fb030c8ca22f18915848f20ccd7dbd953c"
+    },
+    {
+      "path": "/tmp/thessa-ground-hemisphere-architecture.log",
+      "sha256": "66ee0aa005df67e220967ccfcd431341a48dbf0728b3a862419b6aceb7a0a0ae"
+    },
+    {
+      "path": "/tmp/thessa-ground-hemisphere-native-build.log",
+      "sha256": "d14c9059a9e5d59f15dee1c210c55ce8873b5e2e75663232430aeb75a578f40a"
+    },
+    {
+      "path": "/tmp/thessa-ground-hemisphere-ray-build.log",
+      "sha256": "9371b22b46f7ecf14bd9e42d26e4f08e961133b730fe917bc42e58ac5f87d8dc"
+    }
+  ],
+  "visual_review": {
+    "complete_inventory": [
+      {
+        "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red",
+        "reviewed_by": "root; complete sheets and native scene beauty; independent Luna native diagnostic and beauty review",
+        "image_count": 29,
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/ground-tiltedfalse-back_sun.png",
+            "sha256": "e216858a0fcfaef5d3a78c4d0295917c6f4187c7f2a0addb6e79e7ae8c9851b3"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/ground-tiltedfalse-sky.png",
+            "sha256": "d9da2ac8b1e635cc3593f377e8125596ef8bba5fd8d5cb1e6596e94093a8de03"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/ground-tiltedtrue-back_sun.png",
+            "sha256": "5a155c09edbaed7135f9e50409641ff8904708ea230902a041ce7b4a230b0848"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/ground-tiltedtrue-sky.png",
+            "sha256": "105769513de5ff3e14365428536a7977396ba961d62166c7dec880ccfe9e28b1"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/review-all.jpg",
+            "sha256": "758a51596b0f9af292cdc38c5524d33e1648ac496525e507d26317f7cf00b7a5"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingfalse-qualityHigh-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingfalse-qualityHigh-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingfalse-qualityLow-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingfalse-qualityLow-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingfalse-qualityMedium-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingfalse-qualityMedium-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingtrue-qualityHigh-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingtrue-qualityHigh-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingtrue-qualityLow-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingtrue-qualityLow-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingtrue-qualityMedium-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedfalse-conformingtrue-qualityMedium-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingfalse-qualityHigh-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingfalse-qualityHigh-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingfalse-qualityLow-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingfalse-qualityLow-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingfalse-qualityMedium-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingfalse-qualityMedium-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingtrue-qualityHigh-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingtrue-qualityHigh-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingtrue-qualityLow-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingtrue-qualityLow-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingtrue-qualityMedium-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-red/water-tiltedtrue-conformingtrue-qualityMedium-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          }
+        ]
+      },
+      {
+        "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2",
+        "reviewed_by": "root; complete sheets and native scene beauty; independent Luna native diagnostic and beauty review",
+        "image_count": 29,
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/ground-tiltedfalse-back_sun.png",
+            "sha256": "59a2d6d7b0528c3f7ae6e3d800077118d5767ba6070ae7e9ab44a028d4010feb"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/ground-tiltedfalse-sky.png",
+            "sha256": "d9da2ac8b1e635cc3593f377e8125596ef8bba5fd8d5cb1e6596e94093a8de03"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/ground-tiltedtrue-back_sun.png",
+            "sha256": "52bca050f660c6e3badea77097a97d9425b30c8a25ddfdd6b7a9137ccc792b0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/ground-tiltedtrue-sky.png",
+            "sha256": "105769513de5ff3e14365428536a7977396ba961d62166c7dec880ccfe9e28b1"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/review-all.jpg",
+            "sha256": "ea788d26e1cd34c8613f14e81ab24c0f3a1157de57c7fd1ef0071563c2e0bfda"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingfalse-qualityHigh-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingfalse-qualityHigh-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingfalse-qualityLow-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingfalse-qualityLow-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingfalse-qualityMedium-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingfalse-qualityMedium-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingtrue-qualityHigh-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingtrue-qualityHigh-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingtrue-qualityLow-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingtrue-qualityLow-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingtrue-qualityMedium-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedfalse-conformingtrue-qualityMedium-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingfalse-qualityHigh-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingfalse-qualityHigh-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingfalse-qualityLow-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingfalse-qualityLow-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingfalse-qualityMedium-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingfalse-qualityMedium-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingtrue-qualityHigh-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingtrue-qualityHigh-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingtrue-qualityLow-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingtrue-qualityLow-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingtrue-qualityMedium-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-matrix-green2/water-tiltedtrue-conformingtrue-qualityMedium-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          }
+        ]
+      },
+      {
+        "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite",
+        "reviewed_by": "root; complete sheets and native scene beauty; independent Luna native diagnostic and beauty review",
+        "image_count": 29,
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/ground-tiltedfalse-back_sun.png",
+            "sha256": "59a2d6d7b0528c3f7ae6e3d800077118d5767ba6070ae7e9ab44a028d4010feb"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/ground-tiltedfalse-sky.png",
+            "sha256": "d9da2ac8b1e635cc3593f377e8125596ef8bba5fd8d5cb1e6596e94093a8de03"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/ground-tiltedtrue-back_sun.png",
+            "sha256": "52bca050f660c6e3badea77097a97d9425b30c8a25ddfdd6b7a9137ccc792b0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/ground-tiltedtrue-sky.png",
+            "sha256": "105769513de5ff3e14365428536a7977396ba961d62166c7dec880ccfe9e28b1"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/review-all.jpg",
+            "sha256": "ea788d26e1cd34c8613f14e81ab24c0f3a1157de57c7fd1ef0071563c2e0bfda"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingfalse-qualityHigh-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingfalse-qualityHigh-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingfalse-qualityLow-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingfalse-qualityLow-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingfalse-qualityMedium-specularfalse.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingfalse-qualityMedium-speculartrue.png",
+            "sha256": "3ffb77a2ffe719b392cf7701287368b703c1482cff2bbcbaf19185d048378d63"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingtrue-qualityHigh-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingtrue-qualityHigh-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingtrue-qualityLow-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingtrue-qualityLow-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingtrue-qualityMedium-specularfalse.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedfalse-conformingtrue-qualityMedium-speculartrue.png",
+            "sha256": "170e1fe61a7bd4f0225f695c3b34b78e08499f87b4aa76b712bcf432d1144d0a"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingfalse-qualityHigh-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingfalse-qualityHigh-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingfalse-qualityLow-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingfalse-qualityLow-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingfalse-qualityMedium-specularfalse.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingfalse-qualityMedium-speculartrue.png",
+            "sha256": "a2e3c9bda4eccb844942c369598a0922180d62551facc83f307ccbe8d5c603ed"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingtrue-qualityHigh-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingtrue-qualityHigh-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingtrue-qualityLow-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingtrue-qualityLow-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingtrue-qualityMedium-specularfalse.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-hemisphere-final-suite/water-tiltedtrue-conformingtrue-qualityMedium-speculartrue.png",
+            "sha256": "9a1dad753de90ad74eb86800a922c6ea5253d2fa26254bf6c32e23279390f9fe"
+          }
+        ]
+      },
+      {
+        "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m",
+        "reviewed_by": "root; complete sheets and native scene beauty; independent Luna native diagnostic and beauty review",
+        "image_count": 23,
+        "images": [
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/full-fhd.png",
+            "sha256": "9a149bbcac69c4a5043495f445a0bb78d7047d4a6a9e141eae0e6f1df3f44490"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/review-all.jpg",
+            "sha256": "9ba2e0e1eba2a98738c7cca4e393d6ab0d056f052e2a4cfc7a24a37c9ec36baa"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/00-none.png",
+            "sha256": "ba7e37635499036aa212df243b1a9f16d25b8218189f97d17f63ecc163d71f18"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/01-none.png",
+            "sha256": "9a149bbcac69c4a5043495f445a0bb78d7047d4a6a9e141eae0e6f1df3f44490"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/02-none.png",
+            "sha256": "ba7e37635499036aa212df243b1a9f16d25b8218189f97d17f63ecc163d71f18"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/03-none.png",
+            "sha256": "9a149bbcac69c4a5043495f445a0bb78d7047d4a6a9e141eae0e6f1df3f44490"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/04-water_weight.png",
+            "sha256": "3b2201203feebea52d7c45fe95c60d23b197e80211b0909fc31ea8c2fc620840"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/05-height.png",
+            "sha256": "85ea9a9a8d66228322eded67d4d883550f9a657132abbb6fbc792e9f43b15b28"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/06-distance.png",
+            "sha256": "613d509609055caf095b38a6ae731535f25c6d5b0c5385637e32ab314c2b0042"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/07-normal.png",
+            "sha256": "dcfe329d9e8f7c0d5d9d28ef601a7e3dc363c51707090e4dfdaee5cce5eb4b26"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/08-albedo.png",
+            "sha256": "bf69f36b2a724231e1b213f34fc557ce528668015c3617f409171a30af3c6506"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/09-roughness.png",
+            "sha256": "d48f07a66e1c2116a5fccbc6dfeeb62a2d7ce4d6097751fd556fd61e4998c4a3"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/10-geometry.png",
+            "sha256": "d1e26ac3e5afaace8fa6cb13a4d88a976bfd6ed1a9161f8829b4f557ba765a3b"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/11-height_page_level.png",
+            "sha256": "ab5f4ade9a0b1a3eac85a245b0bdc10209dbe8404adac8755b669f7e62b44a3d"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/12-footprint.png",
+            "sha256": "08eab77994f35998c6c1ccebed800c0634afdf3fce4645994cfe699f89a355d2"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/13-material_lod.png",
+            "sha256": "eb40d17cb5a31aa506e280573ecf5a93403dcf88986886c303692eadf484fa12"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/14-resolved_material_lod.png",
+            "sha256": "c37db7d47b580933815a79b35a52eab54d8d51563a78a21834d23946eeb9ee84"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/15-relief_weight.png",
+            "sha256": "49723eb63fadd4c2a82e14f6f3f3bc01f085cc01859a4ce499f3da1557bc7413"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/16-direct.png",
+            "sha256": "6bac35c1d350bd1d585ea65842eb7f62ddebdc65923ebffddbad47e80d216b70"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/17-ambient.png",
+            "sha256": "17cde906997c9bf6523eba8ad8cb6f707c670cfa0c78754965255b8a410790e4"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/18-specular.png",
+            "sha256": "c4f1b11570748e8421baa10a265f68fd0196db43fd1d390c092a7dbaf17cafe9"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/19-land_only.png",
+            "sha256": "43a59daf89829fc98149526e4db8f7431246674c9add40e797615076e6c25a96"
+          },
+          {
+            "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/views/20-none.png",
+            "sha256": "9a149bbcac69c4a5043495f445a0bb78d7047d4a6a9e141eae0e6f1df3f44490"
+          }
+        ]
+      }
+    ],
+    "native_capture_provenance": {
+      "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/opaque-ground-hemisphere-fhd-030m/provenance.json",
+      "sha256": "d4735e317d8fc6970d77ab407c9032183ed4a480a53c61d6c3809788e0f6149e"
+    },
+    "native_capture": "B03 FHD 1920x1080 MSAA4 High RTOff TAAoff, 0.3m survey eye clearance, 20s prestream",
+    "root_finding": "No obvious new native artifact; broad smear/striations remain. Coarse synthetic roots expose faceted geometric terminators. All current emitted images inspected.",
+    "independent_review": {
+      "reviewer": "/root/luna_ground_iterations",
+      "scope": "land/water shader split, analytic oracle, fixture, all 21 native diagnostic views plus beauty",
+      "result": "no blocker for direct-hemisphere slice; soil smear outside closure"
+    },
+    "provenance_note": "Generic capture provenance retains its original pending review label; this manifest records subsequent completed inspection without rewriting the hashed capture record.",
+    "whole_frame_exact_ab": false,
+    "blind_preference_accepted": false,
+    "performance_equivalent": false
+  },
+  "limits": [
+    "Opaque exterior receiver assumption; not general shading-normal energy correction",
+    "Coarse faceted terminators remain geometry/LOD limitation",
+    "Broad close-soil blur remains",
+    "No release timing or full-scene reference acceptance"
+  ],
+  "rejected_fixture_assumptions": [
+    "Backlit pure water does not retain land normal tilt",
+    "Intermediate liquid coverage changes the normal; endpoint radiance interpolation is not a valid oracle"
+  ]
+}

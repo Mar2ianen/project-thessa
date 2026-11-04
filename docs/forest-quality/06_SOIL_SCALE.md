@@ -37,3 +37,8 @@ Low/Medium and fixed GPU budgets. It fixes reproduced f32 carry/cube-neighbor
 failures. Full 21-view source-only and L25 scene reviews see incremental finer
 variation, while the broad smeared soil remains. CPU source cache rises 224 MiB;
 release timing, broader view residency and soil/reference acceptance remain open.
+
+[Direct-sun hemisphere correction](../136_OPAQUE_TERRAIN_SUN_HEMISPHERE.md) closes the reproduced
+opaque-ground backside diffuse/GGX leak. Sky and water controls are preserved;
+complete native visual review found no obvious new regression. This is a light
+contract repair, not closure of item 6 soil blur or reference acceptance.

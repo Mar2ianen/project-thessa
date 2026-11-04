@@ -1031,3 +1031,12 @@ full-density canonical tree crowns/roots guide understory and grass independentl
 of render quality, with cross-face query halos. This closes the placement mechanism
 slice; overall forest realism remains dependent on the following material/light/
 atmosphere/shore items in doc 132.
+
+Ground-to-plant work includes candidate parent-derived scanned dead fronds and
+coverage-driven geometric moss emergence. The dead-frond macro was explicitly
+rejected; appearance and resident-terrain attachment remain open (doc 132 item 2). The existing
+near-cover envelope retains these layers through 32 m survey eye clearance,
+including the 10 m crown diagnostic, within unchanged population/window budgets.
+The scanned resting organs preserve pinna folds while removing their living
+rachis arch; shared-shadow/grazing views now accompany complete visual review.
+Foreground soil and the black patches visible on living leaves remain open.

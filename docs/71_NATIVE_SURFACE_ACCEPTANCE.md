@@ -133,3 +133,8 @@ follow-up fixes the numeric-site HUD label and makes the sea-datum regression
 explicitly assert a submerged eye sample. Focused default and feature-off
 survey tests and app all-feature Clippy passed in the isolated worktree;
 GPU/visual verification is a separate integration stage.
+
+The near-cover survey envelope now extends to 32 m explicit eye clearance, so the
+10 m crown diagnostic retains understory/moss/grass. It keeps the same canonical
+source windows and budgets; 32.01 m and higher fall back to coarse cover. This
+change does not imply continuous moving-camera LOD acceptance (doc 132 item 2).

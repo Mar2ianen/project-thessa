@@ -6,6 +6,8 @@ const CELL_M: f64 = 32.0;
 
 #[derive(Clone, Copy)]
 struct Tree {
+    id: thessa_worldgen_rocky::scatter::ScatterId,
+    heading: DVec3,
     root: DVec3,
     up: DVec3,
     base_radius_m: f64,
@@ -52,6 +54,8 @@ impl CanopyHabitat {
             let pose = instance(item, radius_m);
             let sockets = offline::plant_crown_attachments(form);
             let mut tree = Tree {
+                id: item.id,
+                heading: pose.rotation * DVec3::X,
                 root: pose.position_m,
                 up: DVec3::from(item.direction),
                 base_radius_m: base_radii[form as usize] * item.scale,
@@ -72,6 +76,75 @@ impl CanopyHabitat {
             habitat.cells.entry(cell(tree.root)).or_default().push(tree);
         }
         habitat
+    }
+
+    /// Stable child organs inherit their parent ID/pose, then project onto soil.
+    pub fn fallen_frond_sites(
+        &self,
+        parents: &[ScatterItem],
+        body_radius_m: f64,
+        center: DVec3,
+        radius_m: f64,
+        seed: u64,
+    ) -> Vec<(DVec3, DVec3, f64)> {
+        let mut trees: Vec<_> = self
+            .cells
+            .values()
+            .flatten()
+            .filter(|tree| tree.root.distance(center) <= radius_m)
+            .copied()
+            .collect();
+        for item in parents.iter().filter(|p| p.kind == ScatterKind::FernClump) {
+            let form = offline::plant_form(item.id, item.kind);
+            if form == 1 {
+                continue;
+            } // juvenile rosettes have little retained litter
+            let pose = instance(item, body_radius_m);
+            if pose.position_m.distance(center) > radius_m {
+                continue;
+            }
+            trees.push(Tree {
+                id: item.id,
+                heading: pose.rotation * DVec3::X,
+                root: pose.position_m,
+                up: DVec3::from(item.direction),
+                base_radius_m: 0.0,
+                crowns: [
+                    (
+                        pose.position_m,
+                        f64::from(super::foliage::dimensions(false, form, 0).0) * item.scale,
+                    ),
+                    (DVec3::ZERO, 0.0),
+                ],
+                crown_count: 1,
+            });
+        }
+        let mut sites: Vec<_> = trees
+            .into_iter()
+            .flat_map(|tree| {
+                (0..3_u32).map(move |organ| {
+                    let hash =
+                        |channel| rng::hash01(seed, channel + organ * 17, tree.id.0 as i64, 0);
+                    let angle = hash(7860) * std::f64::consts::TAU;
+                    let along =
+                        tree.heading * angle.cos() + tree.up.cross(tree.heading) * angle.sin();
+                    let crown_radius = tree
+                        .crowns
+                        .iter()
+                        .take(tree.crown_count)
+                        .map(|(_, r)| *r)
+                        .fold(0.0, f64::max);
+                    let length = crown_radius * (0.30 + 0.25 * hash(7861));
+                    let center = tree.root + along * (tree.base_radius_m + 0.10 + length * 0.5);
+                    (
+                        (hash(7862).to_bits(), tree.id, organ),
+                        (center, along, length),
+                    )
+                })
+            })
+            .collect();
+        sites.sort_unstable_by_key(|(rank, _)| *rank);
+        sites.into_iter().map(|(_, site)| site).collect()
     }
 
     pub fn tree_count(&self) -> usize {
@@ -216,6 +289,53 @@ mod tests {
         assert!(
             counts[1][1] > counts[1][0] + 3000,
             "reeds prefer open sky: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn fallen_fronds_inherit_parent_pose_and_remain_stable_across_query_order() {
+        let radius = 3_200_000.0;
+        let a = tree(DVec3::Y);
+        let mut b = tree(DVec3::new(0.000003, 1.0, 0.0).normalize());
+        b.id = thessa_worldgen_rocky::scatter::ScatterId(8);
+        let center = DVec3::Y * (radius + 10.0);
+        let first =
+            CanopyHabitat::new(&[a, b], radius).fallen_frond_sites(&[], radius, center, 30.0, 42);
+        let reverse =
+            CanopyHabitat::new(&[b, a], radius).fallen_frond_sites(&[], radius, center, 30.0, 42);
+        assert_eq!(first, reverse);
+        assert_eq!(first.len(), 6);
+        for (point, along, length) in first {
+            assert!(point.distance(center) < 20.0);
+            assert!(along.is_normalized());
+            assert!((1.0..4.0).contains(&length));
+        }
+        assert!(
+            CanopyHabitat::default()
+                .fallen_frond_sites(&[], radius, center, 30.0, 42)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ground_fern_parents_supply_litter_even_without_a_nearby_tall_tree() {
+        let radius = 3_200_000.0;
+        let parent = ScatterItem {
+            id: (1..1000)
+                .map(thessa_worldgen_rocky::scatter::ScatterId)
+                .find(|&id| offline::plant_form(id, ScatterKind::FernClump) == 0)
+                .unwrap(),
+            kind: ScatterKind::FernClump,
+            ..tree(DVec3::Y)
+        };
+        let center = DVec3::Y * (radius + 10.0);
+        let children =
+            CanopyHabitat::default().fallen_frond_sites(&[parent], radius, center, 30.0, 42);
+        assert_eq!(children.len(), 3);
+        assert!(
+            children
+                .iter()
+                .all(|(p, _, length)| p.distance(center) < 2.0 && *length > 0.1)
         );
     }
 

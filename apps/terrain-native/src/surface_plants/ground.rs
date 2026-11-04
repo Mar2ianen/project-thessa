@@ -190,6 +190,7 @@ mod tests {
             stats.ground_pebbles
                 + stats.ground_moss_meshes
                 + usize::from(stats.ground_litter_fragments > 0)
+                + usize::from(stats.ground_fallen_fronds > 0)
                 + stats.ground_grass_tufts
                 + usize::from(stats.ground_puddles > 0)
         );

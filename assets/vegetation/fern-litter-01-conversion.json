@@ -1,0 +1,206 @@
+{
+  "variant": "source-connected-frond-v2",
+  "source": {
+    "asset": "fern-02.glb",
+    "sha256": "10025cc15e9067b430e5be4b2628a06ac0c7f8acc49d5b2f61dddeda08a48b26",
+    "license": "CC0-1.0",
+    "source_page": "https://polyhaven.com/a/fern_02",
+    "source_license": "https://polyhaven.com/license"
+  },
+  "source_texture_files": [
+    {
+      "role": "2K diffuse",
+      "filename": "fern_02_diff_2k.png",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/2k/fern_02/fern_02_diff_2k.png",
+      "sha256": "25168368e55d56e1d4eb97aaf72b1ea7c59b61aa75d64ebca86150a34762a583",
+      "md5": "3cf4791cc57bafa48df0026ddace3b7b"
+    },
+    {
+      "role": "2K alpha",
+      "filename": "fern_02_alpha_2k.png",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/png/2k/fern_02/fern_02_alpha_2k.png",
+      "sha256": "f51eb9b8f9f4b25a882f8fe12d1ef53ba69448bac7e71396ec1f05b684e9ea75",
+      "md5": "ff18f7e8e869c58eac8f9c7d7c519f4a"
+    }
+  ],
+  "conversion": "Select the longest connected vertex component from source gallery meshes 0, 1, and 2 using its PCA longitudinal extent after projecting that axis into the source-normal tangent plane. Root each at the component vertex nearest its existing rounded gallery root. The authored area-weighted sheet-normal average and projected longitudinal axis define the blade-face frame: their cross product maps true transverse width to local +X, while the mean normal maps to local +Y. This avoids mapping sheet-normal arch variance to width. Uniform scale makes positive root-to-tip extent 1.0. Subtract the least-squares cubic longitudinal rachis arch before flattening; preserve transverse pinna folds and transform normals by the full inverse-transpose shear/scale. This authors a resting fallen organ rather than projecting its living canopy arch onto the floor. Preserve 35% of source out-of-plane curl and use the same 0.35 tangent-normal relief scale as a flattened-sheet microrelief approximation (not an exact rebake of the deformed scan). Preserve source UVs; vertex normals use the inverse transpose of rotation plus curl scaling. Use pinned 2K diffuse RGB and 16-bit grayscale alpha maps; remap alpha into RGBA16 without changing samples. Linear diffuse luminance modulates authored muted dry-brown linear target [0.15, 0.105, 0.065]; 10% of median-white-balanced source chromaticity remains around that dry target, preserving subtle scan pigment/lesion variation; the full-chromaticity candidate was visually rejected for pink/purple shifts. The renderer may quantize this texture to RGBA8. This is an optical dead-frond proxy, not measured senescent tissue.",
+  "textures": [
+    {
+      "role": "dry base color + cutout alpha",
+      "source_sha256": "47e5a243404b8a292e771b83010b1680d9d52fde6082c0506dc23f1f56e38a4c",
+      "output_sha256": "89ebffa4f3960a68fac16f27cb37a73500091ac39568246f0d0397e64a96041b",
+      "alpha_source_sha256": "f51eb9b8f9f4b25a882f8fe12d1ef53ba69448bac7e71396ec1f05b684e9ea75",
+      "alpha_samples_preserved_exactly_in_rgba16": true,
+      "source_map_resolution": [
+        2048,
+        2048
+      ]
+    },
+    {
+      "role": "normal",
+      "source_sha256": "2d12c183a5fa3f35870e6aecfb6bcd889bec6e451e9a0e48b65e84d2038b4b66",
+      "output_sha256": "2d12c183a5fa3f35870e6aecfb6bcd889bec6e451e9a0e48b65e84d2038b4b66",
+      "preserved_exactly": true
+    },
+    {
+      "role": "metallic-roughness ORM",
+      "source_sha256": "eb48a62716dc6480017d301ab80ee9ea61500b50e541d1057d64ba2774d1b831",
+      "output_sha256": "eb48a62716dc6480017d301ab80ee9ea61500b50e541d1057d64ba2774d1b831",
+      "preserved_exactly": true
+    }
+  ],
+  "forms": [
+    {
+      "source_mesh_index": 0,
+      "source_mesh_name": "Plane.003",
+      "source_node_name": "fern_02_a__reference_frozen",
+      "source_component_vertices": 103,
+      "source_component_triangles": 144,
+      "source_component_root_vertex": 1,
+      "source_gallery_root_world": [
+        -0.0,
+        0.0,
+        1.0
+      ],
+      "source_frond_root_world": [
+        0.0004751679953187704,
+        0.001735685858875513,
+        0.9943619836121798
+      ],
+      "source_long_axis": [
+        0.6411862912587116,
+        0.6864446281228342,
+        -0.34303631356345127
+      ],
+      "source_width_axis": [
+        -0.3629644303054214,
+        -0.12256929703549077,
+        -0.9237064413314906
+      ],
+      "source_area_weighted_sheet_normal": [
+        -0.6761190444255801,
+        0.7167778874557511,
+        0.17056523039444765
+      ],
+      "pca_second_axis_sheet_normal_alignment": 0.4259419835394605,
+      "width_frame": "cross(area-weighted authored vertex-normal average, projected PCA longitudinal axis)",
+      "source_longitudinal_extent_m": 0.3701057892482411,
+      "output_longitudinal_extent": 1.0552940368652344,
+      "out_of_plane_scale": 0.35,
+      "removed_rachis_arch_coefficients": [
+        0.00017759620666034696,
+        -0.3992501027732689,
+        1.7809912518983362,
+        -1.4714358363869613
+      ],
+      "source_normalized_height_span": 0.299268919104308,
+      "resting_normalized_height_span": 0.061135350537445905,
+      "uvs_preserved_exactly": true,
+      "normal_transform": "rotate, inverse-transpose arch removal and local-Y curl scale, normalize"
+    },
+    {
+      "source_mesh_index": 1,
+      "source_mesh_name": "Plane.001",
+      "source_node_name": "fern_02_b__reference_frozen",
+      "source_component_vertices": 123,
+      "source_component_triangles": 176,
+      "source_component_root_vertex": 365,
+      "source_gallery_root_world": [
+        -0.0,
+        0.0,
+        0.0
+      ],
+      "source_frond_root_world": [
+        -0.009164560586214066,
+        0.0006408048211596906,
+        -0.009729703888297081
+      ],
+      "source_long_axis": [
+        0.7130224141524617,
+        0.34627606512057585,
+        -0.6096654194234786
+      ],
+      "source_width_axis": [
+        -0.6717685634446212,
+        0.08834923230115839,
+        -0.7354735959362143
+      ],
+      "source_area_weighted_sheet_normal": [
+        -0.2008134310342446,
+        0.9339632219078045,
+        0.295612357725194
+      ],
+      "pca_second_axis_sheet_normal_alignment": 0.8459782545566729,
+      "width_frame": "cross(area-weighted authored vertex-normal average, projected PCA longitudinal axis)",
+      "source_longitudinal_extent_m": 0.631532193928892,
+      "output_longitudinal_extent": 1.0188690423965454,
+      "out_of_plane_scale": 0.35,
+      "removed_rachis_arch_coefficients": [
+        0.011220264544875609,
+        -0.459362845472934,
+        2.342835031739504,
+        -2.003487903112369
+      ],
+      "source_normalized_height_span": 0.2949070802587404,
+      "resting_normalized_height_span": 0.05517687365933663,
+      "uvs_preserved_exactly": true,
+      "normal_transform": "rotate, inverse-transpose arch removal and local-Y curl scale, normalize"
+    },
+    {
+      "source_mesh_index": 2,
+      "source_mesh_name": "Plane.002",
+      "source_node_name": "fern_02_c__reference_frozen",
+      "source_component_vertices": 103,
+      "source_component_triangles": 144,
+      "source_component_root_vertex": 838,
+      "source_gallery_root_world": [
+        1.0,
+        0.0,
+        -0.0
+      ],
+      "source_frond_root_world": [
+        1.0015730240847915,
+        0.010323235765099525,
+        -0.00939773116260767
+      ],
+      "source_long_axis": [
+        0.9044325835474185,
+        0.13971267650838803,
+        -0.4030906471757985
+      ],
+      "source_width_axis": [
+        -0.400868487590723,
+        0.6015969423424004,
+        -0.6909309477950752
+      ],
+      "source_area_weighted_sheet_normal": [
+        0.14596628882885235,
+        0.7864868002624946,
+        0.600110286146134
+      ],
+      "pca_second_axis_sheet_normal_alignment": 0.8932287938141321,
+      "width_frame": "cross(area-weighted authored vertex-normal average, projected PCA longitudinal axis)",
+      "source_longitudinal_extent_m": 0.5019867145757801,
+      "output_longitudinal_extent": 1.0632829666137695,
+      "out_of_plane_scale": 0.35,
+      "removed_rachis_arch_coefficients": [
+        -0.009373652837459018,
+        1.0603154717391312,
+        -1.9627818034489928,
+        0.7335013702411208
+      ],
+      "source_normalized_height_span": 0.37859336926451737,
+      "resting_normalized_height_span": 0.05341555030348365,
+      "uvs_preserved_exactly": true,
+      "normal_transform": "rotate, inverse-transpose arch removal and local-Y curl scale, normalize"
+    }
+  ],
+  "output": {
+    "file": "fern-litter-01.glb",
+    "bytes": 5188988,
+    "sha256": "ab19713dec02e37eaed23471f94d993ed111c640dde62783fd03d2bff500b4a4",
+    "triangles": 464,
+    "vertices": 329
+  },
+  "converter_sha256": "820b7484ea402ccf17eef1fc830d296869c98ca11c24e9d57f14ee5eb3c19497"
+}

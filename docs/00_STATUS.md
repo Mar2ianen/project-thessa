@@ -22,7 +22,8 @@ the latest seven critique items into research, applicability review, implementat
 and evidence. Shared 24 m plant communities, cattail spikes, distinct textured
 low grass, single-apex tree weighting and explicit 0.3 m survey diagnostics are
 implemented. Tree-neighbor crown/root eligibility and cross-face query halos are now implemented
-and verified independently of visual quality. Coherent soil/plant transitions, refined leaf
+and verified independently of visual quality. Parent-linked projected litter, coverage-scaled moss emergence and the 32 m
+near-cover envelope are in final capture review. Refined leaf
 transport, finite-path atmosphere, close-soil quality and coastline integration
 remain partial/open. No full-scene parity or performance win is claimed.
 
@@ -1006,3 +1007,23 @@ resolves 128/256/512 layers for Low/Medium/High ground-detail quality, capped
 by the adapter limit. Unknown/legacy hosts keep 256. Native High retained 357
 GPU pages versus 256 in the preceding fixed-view capture; page priority,
 complete residency, and close-ground visual acceptance remain open.
+
+Forest item 2 is **open**: the user rejected the dead-frond macro. Current work
+corrects source curl/normals and adds a High PBR appearance fixture, while
+parent-seeded litter and coverage-driven moss remain candidates. Numeric
+visibility checks do not close appearance or resident-CBT attachment; see
+[the current review](forest-quality/02_GROUND_TRANSITIONS.md).
+
+The subsequent item-2 visual pass inspected all variants/diagnostics, added real
+raster-shadow and grazing contact controls, and removed the scanned living
+rachis arch from the static fallen-organ asset. Pinna folds remain. Uniform
+pigment, exact resident receiver contact and scene/reference quality remain open;
+[the visual record](artifacts/forest-ground-transitions-visual-review-2026-11-04.json)
+separates observed appearance from numeric coverage checks.
+
+The actual 0.3 m native check exposes large dark patches on living foliage and
+unresolved foreground soil. Resting-organ/coverage improvements do not close
+those defects. The full-chromaticity litter candidate was visually rejected;
+the retained candidate uses a subtle 10% scan chromatic residual around authored
+dry brown. Current package tests, Clippy, architecture and image-review records
+are in the item-2 document; no scene/reference or performance acceptance.

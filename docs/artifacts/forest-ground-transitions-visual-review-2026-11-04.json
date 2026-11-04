@@ -1,0 +1,603 @@
+{
+  "status": "partial; item2 visual acceptance remains open",
+  "sets": [
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v25-source-winding",
+      "images": [
+        {
+          "name": "fallen-frond-f0-l0.4-high-appearance.png",
+          "sha256": "63b71d14dd9a6ef135b9674638c32a7ba2c660cee3644b4944a05ca0c2698e33"
+        },
+        {
+          "name": "fallen-frond-f0-l0.4-high-geometric-normals.png",
+          "sha256": "cd6817d12b3b4e48ee11d92e46f51dfe29feb07067907e582bb5170fb693f1ef"
+        },
+        {
+          "name": "fallen-frond-f0-l0.4-no-soil.png",
+          "sha256": "a31b0c920ecac4cfcf84cfa9db61ec5c442bf80e9387106aeae464de5a6a6b6c"
+        },
+        {
+          "name": "fallen-frond-f0-l0.4-reference-soil.png",
+          "sha256": "6c20c89caf2d9bbd188dac3bfd2f4751eec30914233a8152106b45303b817612"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-appearance.png",
+          "sha256": "a59888b3f56f6489883bcad3336bd4f0d20d7444e4a95c7de1861ee752233ee8"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-geometric-normals.png",
+          "sha256": "4ed4278fc0fcfcfdad75b7d35bdb58d0c5518ac1701c4b1a731fc6d254cdd88d"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-no-soil.png",
+          "sha256": "9861b1ca322c1f7f2ae22e7daac52dc014275db5654b7ffdf13e0e4e482bdfe3"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-reference-soil.png",
+          "sha256": "9b1078d4e1c1f25367a1ccd0b25d5370b9c454867ccd642078bb9afe3e9267c1"
+        },
+        {
+          "name": "fallen-frond-f0-l6.0-high-appearance.png",
+          "sha256": "5b6b9740ea8a75c997d335421f2ea38659947db71c8ee3d5753d16f40d2b63c7"
+        },
+        {
+          "name": "fallen-frond-f0-l6.0-high-geometric-normals.png",
+          "sha256": "9f473fe4fbfe900510dde60cb79efdbe897861e0ed2336dd7583d7417add686d"
+        },
+        {
+          "name": "fallen-frond-f0-l6.0-no-soil.png",
+          "sha256": "e76d4975950b9917a31160994d3346480e72b376001da904159e46588ebf5581"
+        },
+        {
+          "name": "fallen-frond-f0-l6.0-reference-soil.png",
+          "sha256": "ecfbae5d600daadfa17da15d24cb54401815df50b3a82b8a90a05a73180cfbfb"
+        },
+        {
+          "name": "fallen-frond-f1-l0.4-high-appearance.png",
+          "sha256": "07e8d8b79706cb6bcde395c67b63c629e430c875a7b0827abef57107d8690da0"
+        },
+        {
+          "name": "fallen-frond-f1-l0.4-high-geometric-normals.png",
+          "sha256": "080ed671ca27bd025deffbe27a523ec6ce67df24c61ca346ee49a4faf27665a5"
+        },
+        {
+          "name": "fallen-frond-f1-l0.4-no-soil.png",
+          "sha256": "898fe7394f1a911bcbaff02677327450f7a217afab23fc1e8d046ef830c1206c"
+        },
+        {
+          "name": "fallen-frond-f1-l0.4-reference-soil.png",
+          "sha256": "474c5799dce537091964e0a8575ce213ddcec1c0caa59b4b13f929d6952eec69"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-appearance.png",
+          "sha256": "0924a39772611e70fe037b0b42fd334cc01377eb755419ed1cdf10b8c73ec94c"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-geometric-normals.png",
+          "sha256": "5e100b84c4fca9c4f1b2d7a56544357a880e32c789503a35d49b0204f166a8a4"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-no-soil.png",
+          "sha256": "3bb883ddab7f8ea7d1b46c684a09dba53a253af30583d1cfb40399e18734c95e"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-reference-soil.png",
+          "sha256": "5d25d8ebabecf9d23220b38fc4039686a74b8326ac2c1e1c2f5522f027d3a2d9"
+        },
+        {
+          "name": "fallen-frond-f1-l6.0-high-appearance.png",
+          "sha256": "961017405279a7aaf6c9f4460fb13a31b282b1d73478182600a02d17ba816f25"
+        },
+        {
+          "name": "fallen-frond-f1-l6.0-high-geometric-normals.png",
+          "sha256": "6be4608a1f75e5b8e2da46b90ad5328594b7d48bab3539e22af8dd9e8805b222"
+        },
+        {
+          "name": "fallen-frond-f1-l6.0-no-soil.png",
+          "sha256": "696ad8cb18893a249254c1d8ff4a7be7a9c962fad540e198ec7600346e9f1bdd"
+        },
+        {
+          "name": "fallen-frond-f1-l6.0-reference-soil.png",
+          "sha256": "c618e461e7f79ae997e30720fdb8cd278ac29acfb8fa139927d8b25c182a88e5"
+        },
+        {
+          "name": "fallen-frond-f2-l0.4-high-appearance.png",
+          "sha256": "f22c3cc0e1c5642ae8ba66decd24bbf7b9fdf42c174db5588b74d4213b219d0f"
+        },
+        {
+          "name": "fallen-frond-f2-l0.4-high-geometric-normals.png",
+          "sha256": "96c7b9f974e010a7382e54e29f93397a92a07c895d72df8f1ccd0206871dec5f"
+        },
+        {
+          "name": "fallen-frond-f2-l0.4-no-soil.png",
+          "sha256": "f3eb46a7a889bc6ef5e18a45469815e3a6226ae699af4ac44cd6f231a67fa26e"
+        },
+        {
+          "name": "fallen-frond-f2-l0.4-reference-soil.png",
+          "sha256": "39236b2549867469859b10bb7d2b7c294435e221fd8dbd7d7737c76ba341c747"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-appearance.png",
+          "sha256": "5887f9e2002bd8d43828a2501a6cdbec181cb938896361827f251de03d33b311"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-geometric-normals.png",
+          "sha256": "5bfc5020b7e4edf8100134882680c8e7ad53ac26d8c675e40f281c9aa529c0df"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-no-soil.png",
+          "sha256": "1c4028c41323c7c48f2d81719281391f481588b1ced74b080dc71e4003b8e934"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-reference-soil.png",
+          "sha256": "477a8d1370e186dc6073b2764ae847636530b642a270f76ae9286e325011ad42"
+        },
+        {
+          "name": "fallen-frond-f2-l6.0-high-appearance.png",
+          "sha256": "1393c680adb972a9c330619cc05b78f94cb87e7bc6cb5f7cf738bd0fb6a5aab9"
+        },
+        {
+          "name": "fallen-frond-f2-l6.0-high-geometric-normals.png",
+          "sha256": "cd0570ddfd13e38bad53158e97e878a91de5c22b8ea1fe42f1eee1e73ed6b507"
+        },
+        {
+          "name": "fallen-frond-f2-l6.0-no-soil.png",
+          "sha256": "f8fc84b5e2f5528a48c98a0e20d2b94031ef0ed1d6156ed1ef95b137186c24d4"
+        },
+        {
+          "name": "fallen-frond-f2-l6.0-reference-soil.png",
+          "sha256": "75e1053941fd9f0603e744741fb0340a3dedaabb387b9879b5f5b9ed749fe3c0"
+        }
+      ],
+      "inspection": "complete variant/contact sheet; defects opened at native resolution",
+      "reviewer": "root"
+    },
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v26-raster-shadow-contact",
+      "images": [
+        {
+          "name": "fallen-frond-f0-l2.1-high-appearance.png",
+          "sha256": "09d4e492a08c9d5e89925e16235891605b27edb6f21de242e9a561abd15b4554"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-contact.png",
+          "sha256": "5e45e2c635f2cdbf5e3318977dde4149c959e5c1062f2c355a819f33d561df60"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-geometric-normals.png",
+          "sha256": "c130fa1b57928d8ca821477b6249f625c0d84290acc9e2ad841d3a18771eb808"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-no-soil.png",
+          "sha256": "9861b1ca322c1f7f2ae22e7daac52dc014275db5654b7ffdf13e0e4e482bdfe3"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-reference-soil.png",
+          "sha256": "9b1078d4e1c1f25367a1ccd0b25d5370b9c454867ccd642078bb9afe3e9267c1"
+        }
+      ],
+      "inspection": "complete variant/contact sheet; defects opened at native resolution",
+      "reviewer": "root"
+    },
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v27-resting-rachis",
+      "images": [
+        {
+          "name": "fallen-frond-f0-l2.1-high-appearance.png",
+          "sha256": "be15fb7f657fb94c4efb255c5c8a880b427c2370f8a60892dfe8dd82c60f166f"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-contact.png",
+          "sha256": "6ba6bf8037f61d69209701b1e2038793d14826a69dd13103387580a1a34cb800"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-geometric-normals.png",
+          "sha256": "decbb4604fdcc77dc2fec24511a5fad644df2ba1dca27b381ed650f14eb57623"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-no-soil.png",
+          "sha256": "1e624e98317c9c92d35bdb8ab4959bda6992e4d724f6412fec9283c71d32d47f"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-reference-soil.png",
+          "sha256": "4144b0def3310f48c0b43cd54e12e64aa0588d9868f3e0673348c41edd508100"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-appearance.png",
+          "sha256": "763579d9ceba5b907fc02bb43637e2eb6e5f42441cbd05e20b3daf0149a6e7dc"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-contact.png",
+          "sha256": "c97eacb0bf53d567474d5ec4c155ff64f506c1682b93a7f3872b7ab48316a1df"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-geometric-normals.png",
+          "sha256": "85df9d5640acf69b22b16cd96d68fcc7902e54550437d5049a52397d50293a00"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-no-soil.png",
+          "sha256": "f3771bf54b5aa0b669d1fb71c10ce927cd2b994bb775cffa5f1eaa016d4f68c9"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-reference-soil.png",
+          "sha256": "74ab19885693083a66b9e2c42b1e3e3ac3fe7c14ff3828f801c4975ccc590201"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-appearance.png",
+          "sha256": "f5693a7a3c304b88e275ee76f71fc1b9c4e797a1ecdca0d63ced91c5d16acec7"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-contact.png",
+          "sha256": "bf7ec170c05891ed65aad87febfd1f936e9f095dc3e70f27105c4edebf85c1c0"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-geometric-normals.png",
+          "sha256": "9aa471776b9d2f454dfec970a4788df12868a0859f983b82f3e1854a62ea4c21"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-no-soil.png",
+          "sha256": "af7a8b8fa4e5ca44131d0f7439e3874ffb556843416abb79ce5e819ed7fff9ec"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-reference-soil.png",
+          "sha256": "a2c08d46768e57c1edee16bd13dd098ef17af4698b1857c8906927ec5c711b4f"
+        }
+      ],
+      "inspection": "complete variant/contact sheet; defects opened at native resolution",
+      "reviewer": "root"
+    },
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v24-fhd-20s/views",
+      "images": [
+        {
+          "name": "00-none.png",
+          "sha256": "a97abdab49372618ff0f267ab6cd836689ddcd7b49dd6492b4e1f2b8898954c8"
+        },
+        {
+          "name": "01-none.png",
+          "sha256": "e690650e24b9fafd60666556aae79c9653a98dcb3a697777f59309c2252e3f32"
+        },
+        {
+          "name": "02-none.png",
+          "sha256": "a97abdab49372618ff0f267ab6cd836689ddcd7b49dd6492b4e1f2b8898954c8"
+        },
+        {
+          "name": "03-none.png",
+          "sha256": "e690650e24b9fafd60666556aae79c9653a98dcb3a697777f59309c2252e3f32"
+        },
+        {
+          "name": "04-water_weight.png",
+          "sha256": "23ef65866815dd90335429bd3c93754bbdae4191ea0f82547366eeed1dcef6d2"
+        },
+        {
+          "name": "05-height.png",
+          "sha256": "fe2b62ecc2cdd2c1699aaed33848cb3fa612a2173e89eeb858b1f4c176f5d78c"
+        },
+        {
+          "name": "06-distance.png",
+          "sha256": "f72176a378d1a9348c0d81605c1db0163b986a8ef1d2f5864b795b11c17d1f5c"
+        },
+        {
+          "name": "07-normal.png",
+          "sha256": "de35f2f8fe5feaca62b028eb6a3e7c9409ddc10ca9b9f92e46e94625fbd21590"
+        },
+        {
+          "name": "08-albedo.png",
+          "sha256": "e7fd45bf562d0b8c4a55240ea97d7ea00780bba3ee0b7e4e0e923502e582d05c"
+        },
+        {
+          "name": "09-roughness.png",
+          "sha256": "50dcc19988a76f04aee88041f63e74129ed7738c88beb10c4ad63b1cdff0f183"
+        },
+        {
+          "name": "10-geometry.png",
+          "sha256": "6aaea6169cb35f2a21f1417423f670733ecb914045bbc942c5f5a4d6760c9f01"
+        },
+        {
+          "name": "11-height_page_level.png",
+          "sha256": "e8c92a20622ab7970eeae38acfe52215123b258a27f537ed5c2feb76807e1364"
+        },
+        {
+          "name": "12-footprint.png",
+          "sha256": "55e98d9d36d1e1825131f1ac3ada14f4325c92aaa981d3eea6963e03a8fb539f"
+        },
+        {
+          "name": "13-material_lod.png",
+          "sha256": "90b8b3e296c0107614f9fc02b17f9f397990c622a0a204fce388c26b9a4088ee"
+        },
+        {
+          "name": "14-relief_weight.png",
+          "sha256": "e4feb79209bdd867bcdbcd142f796d882743cfcdc4a83b94d32e28559680d3aa"
+        },
+        {
+          "name": "15-direct.png",
+          "sha256": "b77690ba56f8634aeef534cec67728838e11b3ebcd6c69117136bdf32d9c793b"
+        },
+        {
+          "name": "16-ambient.png",
+          "sha256": "9b5c5ac21b0b493899b3e9eea6e55a3174c4c6b179dc792e08cf4ada1ed2d279"
+        },
+        {
+          "name": "17-specular.png",
+          "sha256": "ef1d4621974b5dea453af48a0217c1403e66d836f3a453ccc7276302ed9f8323"
+        },
+        {
+          "name": "18-land_only.png",
+          "sha256": "91c8e003ec0652bcaac3b6a4501aa746422d60566c2f29d53dacf8b883aba674"
+        },
+        {
+          "name": "19-none.png",
+          "sha256": "e690650e24b9fafd60666556aae79c9653a98dcb3a697777f59309c2252e3f32"
+        }
+      ],
+      "inspection": "complete variant/contact sheet; defects opened at native resolution",
+      "reviewer": "root"
+    },
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v27-fhd-20s/views",
+      "images": [
+        {
+          "name": "00-none.png",
+          "sha256": "fb0fc6a116036bd3efcacff937e686fd49e4c703b8272c57a36301e9bfc33d25"
+        },
+        {
+          "name": "01-none.png",
+          "sha256": "14b67b477858dca55cde0fb248ebba9a62e3c8aa6543e5892845f4000b032a87"
+        },
+        {
+          "name": "02-none.png",
+          "sha256": "fb0fc6a116036bd3efcacff937e686fd49e4c703b8272c57a36301e9bfc33d25"
+        },
+        {
+          "name": "03-none.png",
+          "sha256": "14b67b477858dca55cde0fb248ebba9a62e3c8aa6543e5892845f4000b032a87"
+        },
+        {
+          "name": "04-water_weight.png",
+          "sha256": "23ef65866815dd90335429bd3c93754bbdae4191ea0f82547366eeed1dcef6d2"
+        },
+        {
+          "name": "05-height.png",
+          "sha256": "fe2b62ecc2cdd2c1699aaed33848cb3fa612a2173e89eeb858b1f4c176f5d78c"
+        },
+        {
+          "name": "06-distance.png",
+          "sha256": "f72176a378d1a9348c0d81605c1db0163b986a8ef1d2f5864b795b11c17d1f5c"
+        },
+        {
+          "name": "07-normal.png",
+          "sha256": "c43c8ffa9b996f8d68db31bdff43b668fc623add2b65e8046b9bafd360e498e6"
+        },
+        {
+          "name": "08-albedo.png",
+          "sha256": "cae9fe22ee1ac2580edf3d829c2e0b71fc7157855f5faf9850506720dd379a98"
+        },
+        {
+          "name": "09-roughness.png",
+          "sha256": "54435df03d2b0a4641a8d6d0d178c817ae812c333b1b052a090615d2c19f6677"
+        },
+        {
+          "name": "10-geometry.png",
+          "sha256": "6aaea6169cb35f2a21f1417423f670733ecb914045bbc942c5f5a4d6760c9f01"
+        },
+        {
+          "name": "11-height_page_level.png",
+          "sha256": "e8c92a20622ab7970eeae38acfe52215123b258a27f537ed5c2feb76807e1364"
+        },
+        {
+          "name": "12-footprint.png",
+          "sha256": "55e98d9d36d1e1825131f1ac3ada14f4325c92aaa981d3eea6963e03a8fb539f"
+        },
+        {
+          "name": "13-material_lod.png",
+          "sha256": "90b8b3e296c0107614f9fc02b17f9f397990c622a0a204fce388c26b9a4088ee"
+        },
+        {
+          "name": "14-relief_weight.png",
+          "sha256": "2f97bab7ebeb6d3beb5d2445fd4054feb4c0602c0ba72dbd5287db016fd435d0"
+        },
+        {
+          "name": "15-direct.png",
+          "sha256": "bb973d7f87672df3e6a963bcceeef83c263fb0288150839f72609274bb6afa7a"
+        },
+        {
+          "name": "16-ambient.png",
+          "sha256": "638d320774a6545572f4250cb19c77675f50933e851792c0ec69527658e88451"
+        },
+        {
+          "name": "17-specular.png",
+          "sha256": "19d5a1e4704068e8cafa75966eed565dba1de685f678f00cc0a74b5ff149ca35"
+        },
+        {
+          "name": "18-land_only.png",
+          "sha256": "2b57ff8d36fc679d4be0e9daa46046009c1136d1345055b1196f6d0d5615a740"
+        },
+        {
+          "name": "19-none.png",
+          "sha256": "14b67b477858dca55cde0fb248ebba9a62e3c8aa6543e5892845f4000b032a87"
+        }
+      ],
+      "inspection": "all20 visually inspected; scene quality still open",
+      "reviewer": "root"
+    },
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v28-source-pigment",
+      "images": [
+        {
+          "name": "fallen-frond-f0-l2.1-high-appearance.png",
+          "sha256": "f7d8096a9e80acb71ba86473c172df3e31bb70bca4a66cb2a3e76610e17bc3c5"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-contact.png",
+          "sha256": "ce3e3b7abcfe541d13f1958c87059005e723fea20b1b7a7ee4fa97808ef5e3a6"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-geometric-normals.png",
+          "sha256": "707266056b082a06c413be7cd2d7dcd9568eca211c544dba3c1da37d9e25101d"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-no-soil.png",
+          "sha256": "d3aab83fff6a9823d667393b64870f3130c414f647f6a3541b4add2191a239da"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-reference-soil.png",
+          "sha256": "331da657ff435b6c667b15eb621e49cc5383942ba7b4a00260c7e2066731a56e"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-appearance.png",
+          "sha256": "7d8bd7aee0922942d603dc0d85b571954d72011c4b1c48128d277dd1fa1436a1"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-contact.png",
+          "sha256": "8a39dee13030d4225b19a3eaa9e66e19312745ff1d015efea4f660469e356763"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-geometric-normals.png",
+          "sha256": "e2f1976bb265b283a94e4e6e3549240ed958882e142e1708476b9eb3c89333ec"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-no-soil.png",
+          "sha256": "358d927ebea7398a691659a107b8b40c78cbe17be581745916d51a24ba98a2fd"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-reference-soil.png",
+          "sha256": "da2b8486366eb997e3050b87f0377f536d952e52f1b6828ee643cb0a6bc69fbd"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-appearance.png",
+          "sha256": "48f551e025cf9a468c13fcfe4821b726fdcbfc9842d27088244e59a4a65c9eef"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-contact.png",
+          "sha256": "ff34ef76e0aaed22ab1a719d0c6bef8ed08ae1a0954795990c0ed32ac5e864d2"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-geometric-normals.png",
+          "sha256": "8bbc6ac98c35448db2cdc8a864a6bfe91db0152303b91ee13c0d8a1fbd189dcb"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-no-soil.png",
+          "sha256": "0829ebebb3bbddf0f69bb5a645d9ed2ba0ef8a84869c590b9c614bdbf313adee"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-reference-soil.png",
+          "sha256": "db5821dcc0aec046ca19d81c73c33cea7a4f8ceeb7017b5595e5e2609cd58302"
+        }
+      ],
+      "inspection": "rejected: full source chromaticity creates pink/purple leaf patches",
+      "reviewer": "root"
+    },
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v29-muted-pigment",
+      "images": [
+        {
+          "name": "fallen-frond-f0-l2.1-high-appearance.png",
+          "sha256": "12b8619203f68fd370a87b0c6d5072de114cda1d5043f7af0569be4f82bcf050"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-contact.png",
+          "sha256": "367b617c11ff069da0f3bd537b421c7d22cdf1defb3ee696a93add840a463160"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-high-geometric-normals.png",
+          "sha256": "4fc6d226bba4494e18d0413616be4974be666f52647a38a5a0137bd021e30713"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-no-soil.png",
+          "sha256": "0af7fce0e026a42ab2e9745d2e54a7400f9104d1cf25c138c71a002c5ee6191a"
+        },
+        {
+          "name": "fallen-frond-f0-l2.1-reference-soil.png",
+          "sha256": "c985df7759dfed110c7503c4ca1324ae55aa604469a03e3095f53a486b59fa48"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-appearance.png",
+          "sha256": "8b1620baa6445ee3acfc3b1b443f4ddee215734eb43054ff0e158e401561e6b3"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-contact.png",
+          "sha256": "668eadcedeb96568a3b94a55cbf037ef5a90bd7813ff512fc8faececff249912"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-high-geometric-normals.png",
+          "sha256": "4b79dea0a4d437e9cf65d1b4f5350c51139b86ba9166eaef89f81d389c5f1297"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-no-soil.png",
+          "sha256": "a83b2d9453a717aa02352e2263d5deb0350705b07f2a422c780271bdde49ff94"
+        },
+        {
+          "name": "fallen-frond-f1-l2.1-reference-soil.png",
+          "sha256": "c7213ab25a221e71885b7380682c13f04d00e801edf86b55e47292dc2c0ab497"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-appearance.png",
+          "sha256": "cb937243be1842ae89dad50fcabc900684ee35317985b5b2dff3baae092bdaf0"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-contact.png",
+          "sha256": "97441440b1476c17699b933515f1b326b98d2e827b8e9ce7ef6f73b277533d22"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-high-geometric-normals.png",
+          "sha256": "d6724f370cc2d15f95780b36bbfabb8f38125614aece8ae2c8210e65a6e45e5b"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-no-soil.png",
+          "sha256": "b65a5cb185e35baefed0e2ed801dc318b08b154e53be9124aedede884fa394b7"
+        },
+        {
+          "name": "fallen-frond-f2-l2.1-reference-soil.png",
+          "sha256": "b95c1476e38505c51fd2fa746462f88dde47be05cd7a63e8215a54322c566810"
+        }
+      ],
+      "inspection": "retained as candidate:10% chromatic residual stays brown; contact/shape remain as v27",
+      "reviewer": "root"
+    },
+    {
+      "directory": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v29-soil-030m",
+      "images": [
+        {
+          "name": "full-fhd.png",
+          "sha256": "cbe9330f94c7c0b7b1ba19e560d87f02e3c9cfc4b61ed251f2f2739a4d1274b9"
+        }
+      ],
+      "inspection": "full-size inspection: live leaves show large black patches, foreground soil remains mushy; not scene acceptance",
+      "reviewer": "root"
+    }
+  ],
+  "source_asset": {
+    "file": "fern-litter-01.glb",
+    "bytes": 4668464,
+    "sha256": "85468516f7a6ca344cb5152c6d446b07c2e166a19b7f237e38e606ca95c80f0b",
+    "triangles": 464,
+    "vertices": 329
+  },
+  "findings": {
+    "v25": "9 organ/size combinations reviewed in all4 modes; source-width fix holds; dry uniform pigmentation and grazing dark marks remain; unshadowed fixture cannot prove contact",
+    "v26": "real shared raster caster/receiver pass and low camera expose long living rachis arch hovering above soil",
+    "v27": "all15 images inspected; removed long unsupported arch while retaining pinna folds; low-angle soil occludes parts of forms0/1; source height span .053-.061 times length, i.e. .112-.128m at2.1m, not4cm",
+    "v24_scene": "all20 frozen views inspected; soil is still mushy, sparse distant undergrowth and lighting/shore parity remain open",
+    "v29_soil": "0.3m native close view exposes large black patches on living foliage and unresolved foreground filtering/material detail; next diagnosis must address shared living-leaf shading"
+  },
+  "independent_review": {
+    "reviewer": "luna_ground_iterations",
+    "scope": "all15 v27 images and converter normal transport",
+    "result": "no long hovering arch seen; no visual parity; uniform brown/regularity remain",
+    "corrections": "prior 192/464 winding statistic withdrawn after NumPy broadcast bug; root corrects reviewer double-applied .35 height estimate"
+  },
+  "reference": "https://dev.epicgames.com/documentation/en-us/unreal-engine/blueprint-spline-mesh-component-property-reference-in-unreal-engine",
+  "limitations": [
+    "static optical resting pose; no cloth/decay simulation",
+    "analytic soil receiver is not an exact resident-CBT triangle snapshot",
+    "no blind subjective acceptance",
+    "production frame cost unmeasured"
+  ],
+  "current_asset": {
+    "file": "fern-litter-01.glb",
+    "bytes": 5188988,
+    "sha256": "ab19713dec02e37eaed23471f94d993ed111c640dde62783fd03d2bff500b4a4",
+    "triangles": 464,
+    "vertices": 329
+  }
+}

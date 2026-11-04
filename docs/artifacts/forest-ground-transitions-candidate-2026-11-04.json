@@ -1,0 +1,67 @@
+{
+  "status": "partial; user-rejected v18; scene/reference appearance remains open",
+  "reference": "https://polyhaven.com/a/fern_02",
+  "asset": {
+    "file": "fern-litter-01.glb",
+    "bytes": 4668460,
+    "sha256": "10ab3cb24fd3b5aae3b81520c0fb5b623462170313cf4d18508beda4256d28cd",
+    "triangles": 464,
+    "vertices": 329
+  },
+  "hardware": "AMD Radeon 880M Graphics; RADV STRIX1; Vulkan; renderD128-only bwrap",
+  "integration": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v24-fhd-20s",
+    "size": [
+      1920,
+      1080
+    ],
+    "profile": "debug; serial stage fences; not performance-equivalent",
+    "exit_code": 0,
+    "source_snapshot": {
+      "commit": "4864a5698b77c774f10db4e74b0de64b906d0cd3",
+      "dirty": true,
+      "tracked_diff_sha256": "eab6fa343d35316d28b9ee0644487c77e3ac7de392916b1712cffcc5c2b1e028",
+      "untracked_sha256": {
+        "apps/terrain-native/src/surface_plants/litter.rs": "b9ce27f3021540937005cf1487b32c235090780b2934d8355510b5e1d7969218",
+        "assets/vegetation/fern-litter-01-conversion.json": "22313972da49c2ee67358d23a3a8860ec39552c5eeffcdc2a6c31b7e445b79ce",
+        "assets/vegetation/fern-litter-01.LICENSE.txt": "b14a8fd8353ece9e156802694a5bd621e30bba55d3bafecb6de903cda1ae783b",
+        "assets/vegetation/fern-litter-01.glb": "10ab3cb24fd3b5aae3b81520c0fb5b623462170313cf4d18508beda4256d28cd",
+        "tools/worldgen-rocky/import_fern_litter.py": "bdab4a11a824cde71aee71aeeca62151dce4b26fa9ca840234ccd96831ec3d1a"
+      }
+    },
+    "fallen_fronds": "32",
+    "frond_budget_rejected": "0",
+    "mesh_payload_bytes": "33846912",
+    "texture_payload_bytes": "45707264",
+    "diagnostic_views": 20,
+    "depth_beauty_geometry_identical": true,
+    "limitation": "v24 before source-winding cleanup; timed stream readiness differs across captures; no matched whole-frame A/B or parity claim"
+  },
+  "material_control": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v24-compressed-normal-relief",
+    "normal_map_retained": true,
+    "normal_scale": 0.35,
+    "black_patches": "removed in unblinded form-0 macro inspection; not a blind acceptance"
+  },
+  "open": [
+    "botanical/scene appearance",
+    "exact resident-CBT attachment",
+    "foreground soil",
+    "production performance",
+    "moving-camera and blind review"
+  ],
+  "final_macro_controls": {
+    "path": "/home/chechulin/Documents/Codex/2026-10-23/new-chat-3/outputs/ground-detail-repair-2026-11-03/ground-transitions-v25-source-winding",
+    "cases": "3 forms x lengths 0.4,2.1,6m",
+    "result": "all 9 passed Low visibility; separate High with/without normal-map images written",
+    "source_winding_preserved": true,
+    "appearance_review": "unblinded, partial; no reference acceptance"
+  },
+  "checks": {
+    "native_tests": "153 passed /50 ignored in primary binary; integration tests pass",
+    "clippy": "all targets/all features -D warnings passed after winding cleanup",
+    "architecture": "passed after material-scale asset update",
+    "importer": "explicit pinned 2K inputs; regenerated GLB successfully",
+    "diff_check": "passed"
+  }
+}

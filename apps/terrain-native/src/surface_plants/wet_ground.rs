@@ -351,7 +351,7 @@ fn grass_color_texture(asset: &mut MeshAsset) -> usize {
     texture
 }
 
-fn ground_position(field: &PlanetField, p: DVec3) -> DVec3 {
+pub(super) fn ground_position(field: &PlanetField, p: DVec3) -> DVec3 {
     let dir = p.normalize();
     let height = field.height_m(dir.to_array(), 32.0).max(0.0)
         + lod::ground_relief_height_m(field, dir.to_array(), 0.012);
@@ -381,6 +381,21 @@ fn fallen_leaf(
     let ridge = at(0.0, 0.0, width * 0.35 + 0.002);
     folded_leaf(mesh, [root, left, tip, right, ridge], anchor);
 }
+fn fallen_foliage_material() -> Material {
+    Material {
+        base_color: [0.052, 0.034, 0.018, 1.0],
+        metallic: 0.0,
+        roughness: 0.85,
+        double_sided: true,
+        ..Default::default()
+    }
+}
+
+fn moss_emergence(cover: f64) -> f64 {
+    let t = ((cover - 0.12) / 0.58).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 fn publish(prepared: &mut Prepared, mut mesh: Primitive, anchor: DVec3) {
     if mesh.indices.is_empty() {
         return;
@@ -473,6 +488,7 @@ pub(super) fn append(
         if cover.moss < 0.12 {
             continue;
         }
+        let emergence = moss_emergence(cover.moss);
         let up = DVec3::from(d.direction);
         let (east, north, _) = enu_basis(d.direction);
         let east = DVec3::from(east);
@@ -490,10 +506,10 @@ pub(super) fn append(
             &mut moss_meshes[palette],
             &frame,
             [
-                (0.085 + hash(7800) * 0.105) * 0.65,
-                (0.072 + hash(7801) * 0.092) * 0.65,
+                (0.085 + hash(7800) * 0.105) * 0.65 * (0.35 + 0.65 * emergence),
+                (0.072 + hash(7801) * 0.092) * 0.65 * (0.35 + 0.65 * emergence),
             ],
-            0.052 + cover.moss * 0.025 + hash(7802) * 0.022,
+            (0.052 + cover.moss * 0.025 + hash(7802) * 0.022) * (0.20 + 0.80 * emergence),
             hash(7803) * std::f64::consts::TAU,
             field.params.seed,
             d.id.0 as i64,
@@ -506,14 +522,28 @@ pub(super) fn append(
         stats.ground_moss_meshes += usize::from(prepared.asset.primitives.len() > before);
     }
     let litter_material = prepared.asset.materials.len();
-    prepared.asset.materials.push(Material {
-        base_color: [0.052, 0.034, 0.018, 1.0],
-        roughness: 0.85,
-        double_sided: true,
-        ..Default::default()
-    });
+    prepared.asset.materials.push(fallen_foliage_material());
     let mut litter = blank(litter_material);
-    for d in sites.iter().take(if high { 2048 } else { 512 }) {
+    let litter_limit = if high { 2048 } else { 512 };
+    let frond_sites: Vec<_> = habitat
+        .fallen_frond_sites(
+            &prepared.descriptors,
+            field.params.radius_m,
+            anchor,
+            window.span_m(field.params.radius_m) * 1.5,
+            field.params.seed,
+        )
+        .into_iter()
+        .filter(|(center, _, _)| {
+            let dir = center.normalize().to_array();
+            field.height_m(dir, 32.0) > field.water_height_m(dir)
+        })
+        .take(if high { 32 } else { 8 })
+        .collect();
+    for d in sites.iter().take(litter_limit) {
+        if stats.ground_litter_fragments >= litter_limit {
+            break;
+        }
         let cover = lod::ground_cover_at(field, d.direction, 0.012);
         if cover.wetness < 0.20 || cover.moss > 0.70 {
             continue;
@@ -536,6 +566,34 @@ pub(super) fn append(
         stats.ground_litter_fragments += 1;
     }
     publish(prepared, litter, anchor);
+    if !frond_sites.is_empty() {
+        let material = super::litter::material(prepared)?;
+        let source = super::litter::source()?;
+        let mut fronds = blank(material);
+        let frond_byte_limit = if high { 8_000_000 } else { 2_000_000 };
+        for (i, (center, along, length)) in frond_sites.into_iter().enumerate() {
+            let previous = (fronds.vertices.len(), fronds.indices.len());
+            super::litter::append_frond(
+                &mut fronds,
+                field,
+                &source.primitives[i % source.primitives.len()],
+                center,
+                along,
+                length,
+                anchor,
+            );
+            if fronds.vertices.len() * std::mem::size_of::<Vertex>() + fronds.indices.len() * 4
+                > frond_byte_limit
+            {
+                fronds.vertices.truncate(previous.0);
+                fronds.indices.truncate(previous.1);
+                stats.ground_frond_budget_rejected += 1;
+                continue;
+            }
+            stats.ground_fallen_fronds += 1;
+        }
+        publish(prepared, fronds, anchor);
+    }
     let grass_texture = grass_color_texture(&mut prepared.asset);
     let grass_materials = GRASS_PALETTES.map(|base_color| {
         let material = prepared.asset.materials.len();
@@ -795,8 +853,12 @@ mod tests {
                 && stats.ground_grass_tufts > 0
                 && stats.ground_puddles > 0
         );
+        assert!(
+            stats.ground_fallen_fronds > 0,
+            "the full coastal fixture must actually publish dead fronds"
+        );
         assert!(stats.ground_moss_clumps > 192);
-        assert!(stats.prototype_bytes < 48_000_000 && prepared.asset.primitives.len() <= 37);
+        assert!(stats.prototype_bytes < 48_000_000 && prepared.asset.primitives.len() <= 38);
         prepared.asset.validate().unwrap();
         eprintln!(
             "full_coastal_cover payload={} ranges={} litter={}",
@@ -869,7 +931,7 @@ mod tests {
         assert!(stats.ground_litter_fragments > 0 && stats.ground_litter_fragments <= 2048);
         assert!(stats.ground_puddles > 0 && stats.ground_puddles <= 24);
         assert!(stats.ground_water_samples <= 256 * 17 * 17);
-        assert!(stats.prototype_bytes < 48_000_000 && prepared.asset.primitives.len() <= 37);
+        assert!(stats.prototype_bytes < 48_000_000 && prepared.asset.primitives.len() <= 38);
         let local = &prepared.asset.primitives[prepared.local_ground_start.unwrap()..];
         let moss_anchor = prepared.instances
             [prepared.ranges[prepared.local_ground_start.unwrap()].start as usize]
@@ -919,6 +981,10 @@ mod tests {
             .iter()
             .find(|mesh| prepared.asset.materials[mesh.material].roughness == 0.85)
             .unwrap();
+        assert_eq!(
+            prepared.asset.materials[litter.material].metallic, 0.0,
+            "dead plant tissue is dielectric, not metallic"
+        );
         assert_eq!(litter.indices.len(), stats.ground_litter_fragments * 12);
         let litter_range = prepared
             .asset

@@ -3246,7 +3246,7 @@ mod tests {
                 .unwrap();
             for distance in [20.0, 80.0, 1000.0] {
                 scene.survey.set_distance_m(distance);
-                for agl in [2.0, 50.0] {
+                for agl in [0.3, 2.0, 10.0, 32.0, 32.01, 50.0] {
                     scene.survey_eye_agl_m = Some(agl);
                     let settings = thessa_graphics::ResolvedGraphicsSettings::from_requested(
                         &scene.requested,

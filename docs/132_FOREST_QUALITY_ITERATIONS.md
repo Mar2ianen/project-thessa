@@ -7,7 +7,7 @@ and verification. A researched item is not an implemented or visually accepted i
 | Item | Record | Current implementation status |
 | --- | --- | --- |
 | 1 | [Spatial communities](forest-quality/01_COMMUNITIES.md) | Closed placement slice: communities, canonical crown/root niches, cross-face halos |
-| 2 | [Ground transitions](forest-quality/02_GROUND_TRANSITIONS.md) | Distinct low grass and pigment ramp; parent litter/moss transition open |
+| 2 | [Ground transitions](forest-quality/02_GROUND_TRANSITIONS.md) | Parent-linked projected litter, cover-driven moss emergence and 32 m near-cover envelope in verification |
 | 3 | [Leaf transport](forest-quality/03_LEAF_LIGHT.md) | Existing direct/sky transmission audited; new scattering lobe open |
 | 4 | [Tree architecture](forest-quality/04_TREE_ARCHITECTURE.md) | Single/forked morphotypes now weighted 65/25/10; new architecture open |
 | 5 | [Forest depth](forest-quality/05_FOREST_DEPTH.md) | Existing spherical haze audited; finite-path integration open |
@@ -75,3 +75,15 @@ Luna's v10/v11 inspection found no tall-tree density loss or new boundary artifa
 the 1,786 rejected clumps account for the intended lower understory density.
 This does not close overall forest realism or certify a blind preference. See
 [neighbor evidence](artifacts/forest-neighbor-communities-2026-11-04.json).
+
+Item 2 remains open after the user's explicit dead-frond macro rejection. The
+current scanned-organ candidate corrects clipped curl and collapsed shading
+normals and adds a separate High PBR appearance view. Passing soil-visibility
+controls does not accept its comb-like silhouette or establish resident-CBT
+contact; see the item-specific review record.
+
+The next item-2 pass requires complete visual inspection of every emitted image.
+Real shared shadows and grazing cameras exposed the inherited living rachis arch;
+the offline resting-organ deformation removes that arch while preserving pinna
+folds. Complete variant/scene review and its remaining material/contact defects
+are recorded in the item-specific visual manifest. Item 2 remains open.

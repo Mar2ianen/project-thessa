@@ -16,6 +16,7 @@ use thessa_worldgen_rocky::{
 mod canopy_habitat;
 mod foliage;
 mod ground;
+mod litter;
 mod moss;
 mod wet_ground;
 
@@ -23,8 +24,9 @@ pub const WINDOW_LEVEL: u8 = 14;
 pub const UNDERSTORY_WINDOW_LEVEL: u8 = 18;
 /// 7x7 L18 windows cover a ~270 m square around the near-eye cell.
 pub const UNDERSTORY_WINDOW_RADIUS: i64 = 3;
-/// Near-ground clumps are only meaningful with the eye close to the surface.
-pub const UNDERSTORY_MAX_EYE_AGL_M: f64 = 4.0;
+/// Retain ground cover through low crown-height views, within the same window
+/// and source budgets; higher survey eyes use the coarse representation.
+pub const UNDERSTORY_MAX_EYE_AGL_M: f64 = 32.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
@@ -117,6 +119,8 @@ pub struct Diagnostics {
     pub ground_moss_meshes: usize,
     pub ground_grass_meshes: usize,
     pub ground_litter_fragments: usize,
+    pub ground_fallen_fronds: usize,
+    pub ground_frond_budget_rejected: usize,
     pub ground_puddles: usize,
     pub ground_water_samples: usize,
     pub ground_water_basins: usize,
@@ -148,6 +152,8 @@ impl Diagnostics {
             ("native_surface_ground_moss_meshes", self.ground_moss_meshes.to_string()),
             ("native_surface_ground_grass_meshes", self.ground_grass_meshes.to_string()),
             ("native_surface_ground_litter_fragments", self.ground_litter_fragments.to_string()),
+            ("native_surface_ground_fallen_fronds", self.ground_fallen_fronds.to_string()),
+            ("native_surface_ground_frond_budget_rejected", self.ground_frond_budget_rejected.to_string()),
             ("native_surface_ground_puddles", self.ground_puddles.to_string()),
             ("native_surface_ground_water_samples", self.ground_water_samples.to_string()),
             ("native_surface_ground_water_triangles", self.ground_water_triangles.to_string()),
@@ -187,8 +193,8 @@ impl Diagnostics {
             ("native_surface_plants_publication_cpu_ms", self.publication_ms.to_string()),
             ("native_surface_plants_renderer_reused", self.renderer_reused.to_string()),
             ("native_surface_plants_contract", if self.understory_window.is_some() {
-                "WORLD13 <=9 cross-face L14 large-plant windows plus <=49 cross-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 24 m communities, 8 m local colonies and canonical tree-neighbor root/crown niches; textured CC0 moss-shoot colonies and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four distinct grass shape families per palette and a shared root/body/tip pigment ramp; moisture/community-gated grass can coexist with moss; tall wetland clumps include brown volumetric cattail spikes; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/cutout/shadow/environment path"
-            } else {"WORLD13 <=9 cross-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/cutout/shadow/environment path"}.into()),
+                "WORLD14 <=9 cross-face L14 large-plant windows plus <=49 cross-face L18 near-eye windows; pinned CC0 fronds / full-reduced woody scaffolds / world-addressed 24 m communities, 8 m local colonies and canonical tree-neighbor root/crown niches; coverage-scaled CC0 moss-shoot colonies and parent-seeded fallen fronds and independently rooted instanced grass tufts: Medium <=1200/1600, High <=4250/21200; fourteen curved three-segment grass blades per tuft; four distinct grass shape families per palette and a shared root/body/tip pigment ramp; moisture/community-gated grass can coexist with moss; tall wetland clumps include brown volumetric cattail spikes; <=24 basin pools; optional shared optical soil pose; <=48,000,000 B mesh prototypes; no collision; shared opaque/cutout/shadow/environment path"
+            } else {"WORLD14 <=9 cross-face L14 windows / fixed64 v1; pinned CC0 filtered fronds / full-reduced woody scaffolds; canonical descriptors / optional shared optical soil pose; world-local IDs; no collision; shared opaque/cutout/shadow/environment path"}.into()),
         ].into_iter().map(|(k, v)| (k.into(), v)).collect()
     }
 }

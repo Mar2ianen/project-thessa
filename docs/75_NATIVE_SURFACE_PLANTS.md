@@ -69,7 +69,7 @@ with four organ-level pigment cohorts, shared padded leaf atlases and bounded
 asymmetric pinna/rachis geometry. Full/reduced representations retain identical
 cohort sequences and canonical instances. The source texture payload is
 3,760,128 B at that checkpoint; current source admission is stated above.
-The aggregate range limit remains 37.
+The aggregate range limit at that checkpoint was 37; the current item-2 candidate adds one cutout litter group, for 38.
 Current authored bark factors (forms 0/1/2) are `[0.21,0.16,0.10]`,
 `[0.22,0.17,0.11]`, `[0.20,0.15,0.09]` after the incoming WORLD135 review. WORLD93 replaces the uniform
 living roughness factor with padded-atlas roughness priors 0.70/0.50/0.80/0.90
@@ -1497,3 +1497,21 @@ The [depth vertex-stream continuation](85_NATIVE_DEPTH_VERTEX_STREAMS.md) preser
 The [opaque sidedness continuation](86_NATIVE_OPAQUE_SIDEDNESS.md) separates single-sided ground details from double-sided foliage at raster state, preserving shader lighting and source geometry while removing the fragment discard from both variants.
 
 The [finite Fresnel continuation](87_NATIVE_CLOUD_COST_AND_FRESNEL.md) shares cosine-domain handling between primary foliage, direct stellar response, reflected ray hits and the environment. Normalized-dot roundoff no longer feeds a negative base to WGSL `pow`. Plant geometry, material cohorts, illumination and cloud quality remain unchanged.
+
+The [forest ground-transition candidate](forest-quality/02_GROUND_TRANSITIONS.md)
+adds parent-seeded cutout dead-frond organs (Medium/High caps 8/32; 2/8 MB organ
+geometry sub-budgets inside the existing 48 MB aggregate mesh budget), shares the
+existing ground-cover field for moss emergence, and extends near survey cover
+through 32 m eye clearance. The scanned derivative has explicit CC0 provenance,
+2K cutout pigment, preserved sheet width/curl and source-normal deformation.
+Its macro was rejected by the user; silhouette/material corrections and actual
+FHD publication do not close botanical realism or resident-CBT attachment.
+V24 High publishes 33,846,912 mesh payload bytes and 45,707,264 decoded source
+texture bytes; the old image-payload counts above describe dated checkpoints.
+No production performance acceptance is inferred from the debug capture.
+
+The resting-organ continuation removes the source scan's living longitudinal
+rachis arch offline, preserves pinna folds and applies the exact inverse-transpose
+normal deformation. Shared raster-shadow and grazing-angle specimen views now
+expose hovering that the previous unshadowed top views missed. Complete visual
+variant/diagnostic review is mandatory; the item-2/reference status remains open.
